@@ -1,0 +1,689 @@
+{
+  "name": "Leads — Follow-up Cadence",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-follow-up",
+        "responseMode": "responseNode",
+        "options": {
+          "rawData": true,
+          "binaryPropertyName": "data"
+        }
+      },
+      "id": "a1-lead-followup-001",
+      "name": "Status Changed Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "b3d9f1c7-lead-followup-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst headers = items[0].json.headers || {};\nconst secret = process.env.DAYJOY_WEBHOOK_SECRET;\nconst signature = headers['x-dayjoy-signature'];\nconst timestamp = headers['x-dayjoy-timestamp'];\nconst eventId = headers['x-dayjoy-event-id'];\nconst eventType = headers['x-dayjoy-event'];\nif (!signature || !timestamp || !eventId || !eventType) throw new Error('Missing required headers');\nif (Math.abs(Math.floor(Date.now()/1000) - parseInt(timestamp,10)) > 300) throw new Error('Stale timestamp');\nconst bodyBuffer = await this.helpers.getBinaryDataBuffer(items[0], 'data');\nconst expected = 'sha256=' + crypto.createHmac('sha256', secret).update(bodyBuffer).digest('hex');\nconst sigBuf = Buffer.from(signature), expBuf = Buffer.from(expected);\nif (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) throw new Error('Invalid signature');\nconst ALLOWED = ['lead.status_changed'];\nif (!ALLOWED.includes(eventType)) throw new Error('Unexpected event: ' + eventType);\nconst payload = JSON.parse(bodyBuffer.toString('utf8'));\n// Only trigger cadence when status transitions to CONTACTED\nif ((payload.newStatus || payload.status) !== 'CONTACTED') {\n  throw new Error('Not a CONTACTED transition — skipping cadence');\n}\npayload._meta = { eventId, eventType, receivedAt: new Date().toISOString() };\nreturn [{ json: payload }];"
+      },
+      "id": "a1-lead-followup-002",
+      "name": "Verify HMAC Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "notes": "Only fires on status→CONTACTED. Other status changes rejected (no cadence)."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/automation/event-dedup",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_AUTOMATION_JWT }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"eventId\":\"{{ $json._meta.eventId }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-followup-003",
+      "name": "Event Dedup Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true,\"eventId\":\"{{ $json._meta.eventId }}\",\"cadence\":\"started\"}",
+        "options": { "responseCode": 202 }
+      },
+      "id": "a1-lead-followup-004",
+      "name": "Acknowledge Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [660, 300],
+      "notes": "202 Accepted — cadence runs async. Prevents backend webhook timeout."
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 2,
+        "unit": "days"
+      },
+      "id": "a1-lead-followup-005",
+      "name": "Wait 2 Days",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [880, 300],
+      "notes": "First follow-up window: 2 days after CONTACTED"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads/{{ $('Verify HMAC Signature').item.json.leadId || $('Verify HMAC Signature').item.json.id }}/interactions?since={{ $('Verify HMAC Signature').item.json._meta.receivedAt }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-followup-006",
+      "name": "Check Response (T+2d)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "Has lead replied since CONTACTED? Get interactions since webhook receipt."
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $json.body || $json;\nconst interactions = (resp.data || resp.interactions || []).filter(i => i.direction === 'INBOUND' || i.source === 'lead');\nconst hasResponded = interactions.length > 0;\nreturn [{\n  json: {\n    leadId: $('Verify HMAC Signature').item.json.leadId || $('Verify HMAC Signature').item.json.id,\n    leadEmail: $('Verify HMAC Signature').item.json.email || $('Verify HMAC Signature').item.json.leadEmail,\n    leadPhone: $('Verify HMAC Signature').item.json.phone || $('Verify HMAC Signature').item.json.leadPhone,\n    leadName: ($('Verify HMAC Signature').item.json.firstName || '') + ' ' + ($('Verify HMAC Signature').item.json.lastName || ''),\n    assignedRepId: $('Verify HMAC Signature').item.json.assignedTo || $('Verify HMAC Signature').item.json.assignedRepId,\n    hasResponded,\n    interactionsCount: interactions.length,\n    checkStage: 'T+2d'\n  }\n}];"
+      },
+      "id": "a1-lead-followup-007",
+      "name": "Parse Response Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "value1": "={{ $json.hasResponded }}",
+              "value2": true,
+              "operation": "equal",
+              "outputKey": "responded"
+            }
+          ]
+        },
+        "fallbackOutput": 1
+      },
+      "id": "a1-lead-followup-008",
+      "name": "Responded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1540, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/audit-log",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"event\":\"lead.follow_up_cancelled\",\"severity\":\"INFO\",\"meta\":{\"leadId\":\"{{ $json.leadId }}\",\"reason\":\"lead_responded\",\"stage\":\"{{ $json.checkStage }}\"}}",
+        "options": {
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-followup-009",
+      "name": "Log Cadence Cancelled",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 180],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "Lead responded → cancel rest of cadence"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"EMAIL\",\"recipient\":\"{{ $json.leadEmail }}\",\"template\":\"LEAD_FOLLOW_UP_1\",\"context\":{\"leadName\":\"{{ $json.leadName }}\"}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-followup-010",
+      "name": "Send Follow-up Email #1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 340],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"WHATSAPP\",\"recipient\":\"{{ $json.leadPhone }}\",\"template\":\"LEAD_FOLLOW_UP_1\",\"context\":{\"leadName\":\"{{ $json.leadName }}\"}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-followup-011",
+      "name": "Send Follow-up WhatsApp #1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 460],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 3,
+        "unit": "days"
+      },
+      "id": "a1-lead-followup-012",
+      "name": "Wait 3 More Days",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1980, 400]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads/{{ $('Parse Response Check').item.json.leadId }}/interactions?since={{ $('Verify HMAC Signature').item.json._meta.receivedAt }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-followup-013",
+      "name": "Check Response (T+5d)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, 400],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $json.body || $json;\nconst interactions = (resp.data || resp.interactions || []).filter(i => i.direction === 'INBOUND' || i.source === 'lead');\nconst hasResponded = interactions.length > 0;\nconst ctx = $('Parse Response Check').item.json;\nreturn [{ json: { ...ctx, hasResponded, interactionsCount: interactions.length, checkStage: 'T+5d' } }];"
+      },
+      "id": "a1-lead-followup-014",
+      "name": "Parse Response (T+5d)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2420, 400]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "value1": "={{ $json.hasResponded }}",
+              "value2": true,
+              "operation": "equal",
+              "outputKey": "responded"
+            }
+          ]
+        },
+        "fallbackOutput": 1
+      },
+      "id": "a1-lead-followup-015",
+      "name": "Responded T+5d?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2640, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/audit-log",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"event\":\"lead.follow_up_cancelled\",\"severity\":\"INFO\",\"meta\":{\"leadId\":\"{{ $json.leadId }}\",\"reason\":\"lead_responded\",\"stage\":\"{{ $json.checkStage }}\"}}",
+        "options": {
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-followup-016",
+      "name": "Log Cadence Cancelled (T+5d)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2860, 280],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"EMAIL\",\"recipient\":\"{{ $json.leadEmail }}\",\"template\":\"LEAD_FOLLOW_UP_2\",\"context\":{\"leadName\":\"{{ $json.leadName }}\"}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-followup-017",
+      "name": "Send Follow-up Email #2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2860, 440],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 5,
+        "unit": "days"
+      },
+      "id": "a1-lead-followup-018",
+      "name": "Wait 5 More Days",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [3080, 440]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads/{{ $('Parse Response Check').item.json.leadId }}/interactions?since={{ $('Verify HMAC Signature').item.json._meta.receivedAt }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-followup-019",
+      "name": "Check Response (T+10d)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3300, 440],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $json.body || $json;\nconst interactions = (resp.data || resp.interactions || []).filter(i => i.direction === 'INBOUND' || i.source === 'lead');\nconst hasResponded = interactions.length > 0;\nconst ctx = $('Parse Response Check').item.json;\nreturn [{ json: { ...ctx, hasResponded, interactionsCount: interactions.length, checkStage: 'T+10d' } }];"
+      },
+      "id": "a1-lead-followup-020",
+      "name": "Parse Response (T+10d)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3520, 440]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "value1": "={{ $json.hasResponded }}",
+              "value2": true,
+              "operation": "equal",
+              "outputKey": "responded"
+            }
+          ]
+        },
+        "fallbackOutput": 1
+      },
+      "id": "a1-lead-followup-021",
+      "name": "Responded T+10d?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3740, 440]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/audit-log",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"event\":\"lead.follow_up_cancelled\",\"severity\":\"INFO\",\"meta\":{\"leadId\":\"{{ $json.leadId }}\",\"reason\":\"lead_responded\",\"stage\":\"{{ $json.checkStage }}\"}}",
+        "options": {
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-followup-022",
+      "name": "Log Cadence Cancelled (T+10d)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3960, 320],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads/{{ $json.leadId }}/status",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"status\":\"LOST\",\"lostReason\":\"NO_RESPONSE_10D\",\"lostAt\":\"{{ new Date().toISOString() }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-followup-023",
+      "name": "Mark Lead LOST",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3960, 480],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "No response after 3 follow-ups (T+10d) → status=LOST"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"IN_APP\",\"recipient\":\"{{ $json.assignedRepId }}\",\"template\":\"LEAD_LOST_ALERT\",\"context\":{\"leadId\":\"{{ $json.leadId }}\",\"leadName\":\"{{ $json.leadName }}\",\"reason\":\"No response after 3 follow-ups over 10 days\"},\"priority\":\"MEDIUM\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-followup-024",
+      "name": "Notify Rep of LOST",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4180, 480],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"EMAIL\",\"recipient\":\"sales-manager@dayjoy.ai\",\"template\":\"LEAD_LOST_MANAGER_DIGEST\",\"context\":{\"leadId\":\"{{ $json.leadId }}\",\"leadName\":\"{{ $json.leadName }}\",\"assignedRepId\":\"{{ $json.assignedRepId }}\"}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-followup-025",
+      "name": "Notify Manager of LOST",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4400, 480],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "Email manager for LOST lead digest"
+    }
+  ],
+  "connections": {
+    "Status Changed Webhook": {
+      "main": [
+        [
+          { "node": "Verify HMAC Signature", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Verify HMAC Signature": {
+      "main": [
+        [
+          { "node": "Event Dedup Check", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Event Dedup Check": {
+      "main": [
+        [
+          { "node": "Acknowledge Webhook", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Acknowledge Webhook": {
+      "main": [
+        [
+          { "node": "Wait 2 Days", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Wait 2 Days": {
+      "main": [
+        [
+          { "node": "Check Response (T+2d)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Check Response (T+2d)": {
+      "main": [
+        [
+          { "node": "Parse Response Check", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Response Check": {
+      "main": [
+        [
+          { "node": "Responded?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Responded?": {
+      "main": [
+        [
+          { "node": "Log Cadence Cancelled", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Send Follow-up Email #1", "type": "main", "index": 0 },
+          { "node": "Send Follow-up WhatsApp #1", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Send Follow-up Email #1": {
+      "main": [
+        [
+          { "node": "Wait 3 More Days", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Send Follow-up WhatsApp #1": {
+      "main": [
+        [
+          { "node": "Wait 3 More Days", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Wait 3 More Days": {
+      "main": [
+        [
+          { "node": "Check Response (T+5d)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Check Response (T+5d)": {
+      "main": [
+        [
+          { "node": "Parse Response (T+5d)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Response (T+5d)": {
+      "main": [
+        [
+          { "node": "Responded T+5d?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Responded T+5d?": {
+      "main": [
+        [
+          { "node": "Log Cadence Cancelled (T+5d)", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Send Follow-up Email #2", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Send Follow-up Email #2": {
+      "main": [
+        [
+          { "node": "Wait 5 More Days", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Wait 5 More Days": {
+      "main": [
+        [
+          { "node": "Check Response (T+10d)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Check Response (T+10d)": {
+      "main": [
+        [
+          { "node": "Parse Response (T+10d)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Response (T+10d)": {
+      "main": [
+        [
+          { "node": "Responded T+10d?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Responded T+10d?": {
+      "main": [
+        [
+          { "node": "Log Cadence Cancelled (T+10d)", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Mark Lead LOST", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Mark Lead LOST": {
+      "main": [
+        [
+          { "node": "Notify Rep of LOST", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Notify Rep of LOST": {
+      "main": [
+        [
+          { "node": "Notify Manager of LOST", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "executionTimeout": 1209600
+  },
+  "tags": [
+    { "name": "leads" },
+    { "name": "agent-a1" }
+  ],
+  "meta": {
+    "templateCreatedBy": "Agent A1 — CRM/Sales/Leads",
+    "description": "Multi-day follow-up cadence. Trigger: lead status→CONTACTED. T+2d: check, send follow-up email+WhatsApp if no response. T+5d: send second follow-up. T+10d: mark LOST + notify rep + email manager. Cancels early if lead responds at any checkpoint. executionTimeout=14d to span the full cadence."
+  }
+}

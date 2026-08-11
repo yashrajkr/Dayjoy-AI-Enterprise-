@@ -1,0 +1,11 @@
+{
+  "name": "@dayjoy/config",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": { "build": "tsc" },
+  "dependencies": {
+    "zod": "^3.23.0",
+    "dotenv": "^16.4.0"
+  }
+}

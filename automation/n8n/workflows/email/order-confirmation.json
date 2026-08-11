@@ -1,0 +1,113 @@
+{
+  "name": "Email — Order Confirmation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "email/order-confirmation",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a2e2-0001-orderconf-webhook",
+      "name": "Webhook: order.created",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "a2e2-orderconf-webhook-id"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "cond-event", "leftValue": "={{ $json.body.event }}", "rightValue": "order.created", "operator": { "type": "string", "operation": "equals" } },
+            { "id": "cond-email", "leftValue": "={{ $json.body.data.customer.email }}", "rightValue": "", "operator": { "type": "string", "operation": "isNotEmpty" } }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2e2-0002-orderconf-filter",
+      "name": "Filter: order.created + email",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/orders/{{ $json.body.data.id }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2e2-0003-orderconf-fetch",
+      "name": "Fetch: Full Order Detail",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.all()[0].json.data || $input.all()[0].json;\nconst items = (r.items || []).map((it, i) => `\n  <tr>\n    <td style=\"padding:8px;border-bottom:1px solid #fed7aa;\">${i + 1}</td>\n    <td style=\"padding:8px;border-bottom:1px solid #fed7aa;\">${it.productName || it.name || ''}</td>\n    <td style=\"padding:8px;border-bottom:1px solid #fed7aa;text-align:center;\">${it.quantity || 1}</td>\n    <td style=\"padding:8px;border-bottom:1px solid #fed7aa;text-align:right;\">₹${Number(it.price || it.unitPrice || 0).toLocaleString('en-IN')}</td>\n  </tr>`).join('');\nconst total = Number(r.total || r.grandTotal || 0).toLocaleString('en-IN');\nconst expDelivery = r.expectedDeliveryDate || r.expectedDelivery || '3–7 business days';\nconst tracking = r.trackingNumber ? `<p><strong>Tracking:</strong> <a href=\"${r.trackingUrl || '#'}\">${r.trackingNumber}</a></p>` : '<p><em>Tracking link will be shared once your order ships.</em></p>';\nconst html = `\n<!doctype html><html><body style=\"font-family:Arial,Helvetica,sans-serif;color:#1f2937;background:#fff7ed;margin:0;padding:0;\">\n  <div style=\"max-width:600px;margin:0 auto;padding:32px;\">\n    <h1 style=\"color:#ea580c;\">Order Confirmed! ✅</h1>\n    <p>Hi ${r.customer?.firstName || 'Customer'},</p>\n    <p>Thanks for your order. We've received it and are getting it ready.</p>\n    <h2 style=\"color:#9a3412;\">Order Summary</h2>\n    <p><strong>Order #:</strong> ${r.orderNumber || r.id}<br/><strong>Order Date:</strong> ${new Date(r.createdAt || Date.now()).toLocaleString('en-IN')}</p>\n    <table style=\"width:100%;border-collapse:collapse;\">\n      <thead><tr style=\"background:#ffedd5;\"><th style=\"padding:8px;text-align:left;\">#</th><th style=\"padding:8px;text-align:left;\">Item</th><th style=\"padding:8px;\">Qty</th><th style=\"padding:8px;text-align:right;\">Price</th></tr></thead>\n      <tbody>${items}</tbody>\n      <tfoot><tr><td colspan=\"3\" style=\"padding:8px;text-align:right;\"><strong>Total</strong></td><td style=\"padding:8px;text-align:right;\"><strong>₹${total}</strong></td></tr></tfoot>\n    </table>\n    <h2 style=\"color:#9a3412;\">Delivery</h2>\n    <p><strong>Expected delivery:</strong> ${expDelivery}</p>\n    ${tracking}\n    <p style=\"margin-top:24px;\"><a href=\"https://app.dayjoy.in/orders/${r.id || r.orderNumber}\" style=\"background:#ea580c;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;display:inline-block;\">View Order Details →</a></p>\n    <hr style=\"margin:24px 0;border:none;border-top:1px solid #fed7aa;\" />\n    <p style=\"font-size:12px;color:#6b7280;\">Dayjoy Wellness Pvt. Ltd. · support@dayjoy.in</p>\n  </div>\n</body></html>`;\nreturn [{ json: { html, subject: `Order Confirmation — ${r.orderNumber || r.id}`, recipientEmail: r.customer?.email, orderNumber: r.orderNumber || r.id, orderId: r.id, tenantId: r.tenantId } }];"
+      },
+      "id": "a2e2-0004-orderconf-compose",
+      "name": "Code: Compose Confirmation HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "fromEmail": "orders@dayjoy.in",
+        "toEmail": "={{ $json.recipientEmail }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "a2e2-0005-orderconf-send",
+      "name": "Send: Order Confirmation Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [880, 0],
+      "credentials": { "smtp": { "id": "smtp-cred-id", "name": "smtp" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "X-Source", "value": "n8n/order-confirmation-email" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"EMAIL\",\n  \"event\": \"order_confirmation_email_sent\",\n  \"orderId\": \"{{ $('Code: Compose Confirmation HTML').item.json.orderId }}\",\n  \"orderNumber\": \"{{ $('Code: Compose Confirmation HTML').item.json.orderNumber }}\",\n  \"recipientEmail\": \"{{ $('Code: Compose Confirmation HTML').item.json.recipientEmail }}\",\n  \"status\": \"SENT\",\n  \"tenantId\": \"{{ $('Code: Compose Confirmation HTML').item.json.tenantId }}\",\n  \"metadata\": { \"workflow\": \"order-confirmation\" }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2e2-0006-orderconf-audit",
+      "name": "Log: Audit Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Webhook: order.created": { "main": [ [ { "node": "Filter: order.created + email", "type": "main", "index": 0 } ] ] },
+    "Filter: order.created + email": { "main": [ [ { "node": "Fetch: Full Order Detail", "type": "main", "index": 0 } ] ] },
+    "Fetch: Full Order Detail": { "main": [ [ { "node": "Code: Compose Confirmation HTML", "type": "main", "index": 0 } ] ] },
+    "Code: Compose Confirmation HTML": { "main": [ [ { "node": "Send: Order Confirmation Email", "type": "main", "index": 0 } ] ] },
+    "Send: Order Confirmation Email": { "main": [ [ { "node": "Log: Audit Notification", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "email" }, { "name": "orders" }, { "name": "dayjoy" }]
+}

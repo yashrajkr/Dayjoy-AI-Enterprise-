@@ -1,0 +1,120 @@
+{
+  "name": "AI — Embedding Regeneration (Weekly)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "cronExpression", "expression": "0 2 * * 0" } ] }
+      },
+      "id": "a2ai2-0001-er-schedule",
+      "name": "Schedule: Sunday 2 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/knowledge/documents/stale?olderThanDays=90",
+        "options": { "timeout": 30000 }
+      },
+      "id": "a2ai2-0002-er-fetch",
+      "name": "Fetch: Documents > 90 Days",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "id": "a2ai2-0003-er-split",
+      "name": "Split: Per Document",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/knowledge/documents/{{ $json.id }}/regenerate-embeddings",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"documentId\": \"{{ $json.id }}\",\n  \"tenantId\": \"{{ $json.tenantId }}\",\n  \"reason\": \"SCHEDULED_REGENERATION_OVER_90D\",\n  \"triggeredBy\": \"n8n/embedding-regeneration\",\n  \"triggeredAt\": \"{{ $now.toISO() }}\"\n}",
+        "options": { "timeout": 60000 }
+      },
+      "id": "a2ai2-0004-er-regen",
+      "name": "Regenerate: Embeddings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 10000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/knowledge/documents/{{ $json.documentId || $json.data.documentId }}/update-vector-store",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"documentId\": \"{{ $json.documentId || $json.data.documentId }}\",\n  \"operation\": \"UPSERT\",\n  \"triggeredBy\": \"n8n/embedding-regeneration\"\n}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "a2ai2-0005-er-vector",
+      "name": "Update: Vector Store",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate stats from all documents processed in this run\nconst all = $input.all();\nconst success = all.filter(i => i.json && !i.json.error).length;\nconst failed = all.filter(i => i.json && i.json.error).length;\nreturn [{\n  json: {\n    total: all.length,\n    success,\n    failed,\n    regenStartedAt: new Date().toISOString(),\n    workflow: 'embedding-regeneration'\n  }\n}];"
+      },
+      "id": "a2ai2-0006-er-stats",
+      "name": "Aggregate: Regeneration Stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2ai2-0007-er-audit",
+      "name": "Log: Audit Regeneration",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Schedule: Sunday 2 AM": { "main": [ [ { "node": "Fetch: Documents > 90 Days", "type": "main", "index": 0 } ] ] },
+    "Fetch: Documents > 90 Days": { "main": [ [ { "node": "Split: Per Document", "type": "main", "index": 0 } ] ] },
+    "Split: Per Document": { "main": [ [ { "node": "Regenerate: Embeddings", "type": "main", "index": 0 } ] ] },
+    "Regenerate: Embeddings": { "main": [ [ { "node": "Update: Vector Store", "type": "main", "index": 0 } ] ] },
+    "Update: Vector Store": { "main": [ [ { "node": "Aggregate: Regeneration Stats", "type": "main", "index": 0 } ] ] },
+    "Aggregate: Regeneration Stats": { "main": [ [ { "node": "Log: Audit Regeneration", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "ai" }, { "name": "embeddings" }, { "name": "rag" }, { "name": "maintenance" }, { "name": "dayjoy" }]
+}

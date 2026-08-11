@@ -1,0 +1,93 @@
+# =============================================================================
+# Dayjoy n8n — HorizontalPodAutoscaler
+# Scales n8n-worker based on CPU + memory. n8n-main is held at 2 replicas
+# (manually scaled) because it owns webhook ingress and needs stable DNS.
+# =============================================================================
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: n8n-worker
+  namespace: dayjoy-n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: dayjoy-ai-enterprise
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: n8n-worker
+  minReplicas: 3   # always at least 3 workers for redundancy
+  maxReplicas: 10  # cap to control cost; raise if queue depth alerts fire
+  metrics:
+    # Scale on CPU > 70% (workers are CPU-bound when running AI/HTTP nodes)
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    # Scale on memory > 75%
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 75
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60   # wait 1 min before scaling up
+      policies:
+        - type: Percent
+          value: 100                     # double the replicas in one step
+          periodSeconds: 60
+        - type: Pods
+          value: 2                       # or add 2 pods, whichever is more
+          periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 600  # wait 10 min before scaling down (avoid flapping)
+      policies:
+        - type: Percent
+          value: 25                      # remove up to 25% of pods
+          periodSeconds: 60
+      selectPolicy: Min
+---
+# HPA for n8n-main (less aggressive — only scale on CPU spikes)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: n8n-main
+  namespace: dayjoy-n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: main
+    app.kubernetes.io/part-of: dayjoy-ai-enterprise
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: n8n-main
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 120
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+    scaleDown:
+      stabilizationWindowSeconds: 900
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 300

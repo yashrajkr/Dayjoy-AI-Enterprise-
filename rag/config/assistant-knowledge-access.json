@@ -1,0 +1,39 @@
+{
+  "assistants": {
+    "customer_ai": {
+      "categories": ["products", "pricing_public", "faq", "company", "policies_public"],
+      "accessLevel": "public",
+      "tools": ["search_knowledge", "search_products", "create_lead", "create_support_ticket"]
+    },
+    "distributor_ai": {
+      "categories": ["products", "pricing_full", "faq", "compensation", "distributor_policies", "training"],
+      "accessLevel": "distributor",
+      "tools": ["search_knowledge", "search_products", "customer_lookup", "lead_capture"]
+    },
+    "employee_ai": {
+      "categories": ["products", "pricing_full", "faq", "support", "training", "policies_internal"],
+      "accessLevel": "employee",
+      "tools": ["search_knowledge", "search_products", "customer_lookup", "distributor_lookup", "create_lead", "book_appointment", "create_support_ticket"]
+    },
+    "voice_ai": {
+      "categories": ["products", "pricing_public", "faq", "support_escalation"],
+      "accessLevel": "public",
+      "tools": ["search_knowledge", "search_products", "customer_lookup", "book_appointment", "human_transfer"]
+    },
+    "whatsapp_ai": {
+      "categories": ["products", "pricing_public", "faq"],
+      "accessLevel": "public",
+      "tools": ["search_knowledge", "search_products", "create_lead", "create_support_ticket"]
+    },
+    "website_ai": {
+      "categories": ["products", "pricing_public", "company"],
+      "accessLevel": "public",
+      "tools": ["search_knowledge", "search_products"]
+    },
+    "admin_ai": {
+      "categories": ["*"],
+      "accessLevel": "admin",
+      "tools": ["*"]
+    }
+  }
+}

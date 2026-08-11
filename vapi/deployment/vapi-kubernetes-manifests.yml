@@ -1,0 +1,668 @@
+# ============================================
+# Dayjoy Voice AI — Kubernetes Manifests
+# ============================================
+#
+# Production-grade deployment for the Voice AI service. Includes:
+#   - Namespace
+#   - ConfigMap (non-sensitive configuration)
+#   - ExternalSecret (sensitive values from AWS Secrets Manager)
+#   - Deployment (3 replicas by default, HPA scales 3-10)
+#   - Service (ClusterIP — exposed via Ingress)
+#   - HorizontalPodAutoscaler (CPU + memory triggers)
+#   - PodDisruptionBudget (min available 2)
+#   - NetworkPolicy (ingress from nginx-ingress + monitoring only)
+#   - ServiceMonitor (Prometheus scraping)
+#   - Ingress (TLS via cert-manager)
+#
+# Apply with:
+#   kubectl apply -f vapi/deployment/vapi-kubernetes-manifests.yml
+#
+# Prerequisites:
+#   - External Secrets Operator installed
+#   - cert-manager + ClusterIssuer `letsencrypt-prod` configured
+#   - Prometheus Operator installed (for ServiceMonitor CRD)
+#   - AWS Secrets Manager with secrets:
+#       vapi/api-key
+#       vapi/webhook-secret
+#       vapi/jwt-secret
+#       vapi/openai-key
+#       vapi/sentry-dsn
+#       vapi/sendgrid-key
+#       vapi/twilio-account-sid
+#       vapi/twilio-auth-token
+#       vapi/escalation-slack-webhook
+
+# ============================================
+# Namespace
+# ============================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dayjoy-voice-ai
+  labels:
+    app: voice-ai
+    environment: production
+    app.kubernetes.io/name: dayjoy-voice-ai
+    app.kubernetes.io/part-of: dayjoy-platform
+
+---
+# ============================================
+# ConfigMap — non-sensitive configuration
+# ============================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: voice-ai-config
+  namespace: dayjoy-voice-ai
+  labels:
+    app: voice-ai
+data:
+  NODE_ENV: "production"
+  PORT: "3001"
+  METRICS_PORT: "9090"
+  LOG_LEVEL: "info"
+  LOG_FORMAT: "json"
+  APP_NAME: "dayjoy-voice-ai"
+  API_VERSION: "v1"
+
+  # Database
+  DATABASE_POOL_SIZE: "20"
+  DATABASE_IDLE_TIMEOUT: "30000"
+  DATABASE_CONNECTION_TIMEOUT: "10000"
+
+  # Redis
+  REDIS_URL: "redis://voice-ai-redis:6379"
+
+  # Vapi (non-sensitive)
+  VAPI_WEBHOOK_URL: "https://api.dayjoy.ai/api/voice/webhook"
+  VAPI_VOICE_ID: "rachel"
+  VAPI_MODEL: "gpt-4o"
+  VAPI_TEMPERATURE: "0.7"
+  VAPI_MAX_TOKENS: "500"
+  VAPI_API_BASE_URL: "https://api.vapi.ai"
+  VAPI_ASSISTANT_NAME: "Dayjoy Support Agent"
+  VAPI_SILENCE_TIMEOUT_SECONDS: "30"
+  VAPI_MAX_DURATION_SECONDS: "1800"
+
+  # OpenAI (non-sensitive)
+  OPENAI_MODEL: "gpt-4o"
+  OPENAI_EMBEDDING_MODEL: "text-embedding-3-small"
+
+  # Rate Limiting
+  RATE_LIMIT_WEBHOOK_MAX: "1000"
+  RATE_LIMIT_WEBHOOK_WINDOW_MS: "60000"
+  RATE_LIMIT_API_MAX: "100"
+  RATE_LIMIT_API_WINDOW_MS: "60000"
+
+  # Feature Flags
+  FEATURE_VOICE_RECORDING: "true"
+  FEATURE_TRANSCRIPTION: "true"
+  FEATURE_SENTIMENT_ANALYSIS: "true"
+  FEATURE_HUMAN_TRANSFER: "true"
+  FEATURE_AI_EVALUATION: "true"
+
+  # Call Settings
+  CALL_SILENCE_TIMEOUT_SECONDS: "30"
+  CALL_MAX_DURATION_SECONDS: "1800"
+  CALL_BACKCHANNELING_ENABLED: "true"
+  CALL_BACKGROUND_SOUND: "office"
+
+  # Escalation (non-sensitive)
+  ESCALATION_EMAIL: "escalations@dayjoy.ai"
+  ESCALATION_SLACK_CHANNEL: "#voice-escalations"
+
+  # Monitoring
+  APM_ENABLED: "true"
+  APM_SERVICE_NAME: "dayjoy-voice-ai"
+  APM_ENVIRONMENT: "production"
+  METRICS_ENABLED: "true"
+  METRICS_PATH: "/metrics"
+
+  # Cache
+  CACHE_ENABLED: "true"
+  CACHE_TTL: "3600"
+  CACHE_MAX_SIZE: "1000"
+
+  # Concurrency
+  MAX_CONCURRENT_CALLS: "100"
+  MAX_CONCURRENT_TOOLS: "50"
+  WORKER_THREADS: "4"
+
+  # Health Check
+  HEALTH_CHECK_ENABLED: "true"
+  HEALTH_CHECK_PATH: "/health"
+  HEALTH_CHECK_INTERVAL: "30"
+
+  # Graceful Shutdown
+  SHUTDOWN_TIMEOUT: "30000"
+  SHUTDOWN_GRACE_PERIOD: "5000"
+
+---
+# ============================================
+# SecretStore — points ExternalSecrets at AWS Secrets Manager
+# ============================================
+apiVersion: external-secrets.io/v1beta1
+kind: SecretStore
+metadata:
+  name: voice-ai-secret-store
+  namespace: dayjoy-voice-ai
+spec:
+  provider:
+    aws:
+      service: SecretsManager
+      region: us-east-1
+      auth:
+        jwt:
+          serviceAccountRef:
+            name: voice-ai-external-secrets-sa
+
+---
+# ============================================
+# ExternalSecret — fetches sensitive values into a K8s Secret
+# ============================================
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: voice-ai-secret
+  namespace: dayjoy-voice-ai
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: voice-ai-secret-store
+    kind: SecretStore
+  target:
+    name: voice-ai-secret
+    creationPolicy: Owner
+    deletionPolicy: Retain
+  data:
+    - secretKey: DATABASE_URL
+      remoteRef:
+        key: vapi/database-url
+        property: url
+    - secretKey: REDIS_PASSWORD
+      remoteRef:
+        key: vapi/redis-password
+        property: password
+    - secretKey: VAPI_API_KEY
+      remoteRef:
+        key: vapi/api-key
+        property: apiKey
+    - secretKey: VAPI_WEBHOOK_SECRET
+      remoteRef:
+        key: vapi/webhook-secret
+        property: secret
+    - secretKey: VAPI_ASSISTANT_ID
+      remoteRef:
+        key: vapi/assistant-id
+        property: assistantId
+    - secretKey: VAPI_PHONE_NUMBER_ID
+      remoteRef:
+        key: vapi/phone-number-id
+        property: phoneNumberId
+    - secretKey: OPENAI_API_KEY
+      remoteRef:
+        key: vapi/openai-key
+        property: apiKey
+    - secretKey: JWT_SECRET
+      remoteRef:
+        key: vapi/jwt-secret
+        property: secret
+    - secretKey: SENTRY_DSN
+      remoteRef:
+        key: vapi/sentry-dsn
+        property: dsn
+    - secretKey: SENDGRID_API_KEY
+      remoteRef:
+        key: vapi/sendgrid-key
+        property: apiKey
+    - secretKey: TWILIO_ACCOUNT_SID
+      remoteRef:
+        key: vapi/twilio-account-sid
+        property: accountSid
+    - secretKey: TWILIO_AUTH_TOKEN
+      remoteRef:
+        key: vapi/twilio-auth-token
+        property: authToken
+    - secretKey: ESCALATION_SLACK_WEBHOOK_URL
+      remoteRef:
+        key: vapi/escalation-slack-webhook
+        property: webhookUrl
+    - secretKey: STORAGE_ACCESS_KEY
+      remoteRef:
+        key: vapi/storage-access-key
+        property: accessKey
+    - secretKey: STORAGE_SECRET_KEY
+      remoteRef:
+        key: vapi/storage-secret-key
+        property: secretKey
+
+---
+# ============================================
+# ServiceAccount — for IRSA (IAM Roles for Service Accounts)
+# ============================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: voice-ai-sa
+  namespace: dayjoy-voice-ai
+  annotations:
+    # IRSA role with permissions to read from AWS Secrets Manager
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/dayjoy-voice-ai-secrets
+  labels:
+    app: voice-ai
+
+---
+# ============================================
+# ServiceAccount — for ExternalSecrets reconciliation
+# ============================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: voice-ai-external-secrets-sa
+  namespace: dayjoy-voice-ai
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/dayjoy-voice-ai-external-secrets
+
+---
+# ============================================
+# Deployment
+# ============================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voice-ai
+  namespace: dayjoy-voice-ai
+  labels:
+    app: voice-ai
+    app.kubernetes.io/name: dayjoy-voice-ai
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: voice-ai
+  template:
+    metadata:
+      labels:
+        app: voice-ai
+        app.kubernetes.io/name: dayjoy-voice-ai
+      annotations:
+        # Force rollout when ConfigMap changes
+        checksum/config: "CONFIG_CHECKSUM_PLACEHOLDER"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: voice-ai-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+        - name: voice-ai
+          image: dayjoy/voice-ai:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3001
+              name: http
+            - containerPort: 9090
+              name: metrics
+          envFrom:
+            - configMapRef:
+                name: voice-ai-config
+            - secretRef:
+                name: voice-ai-secret
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 3001
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 3001
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health/ready
+              port: 3001
+            failureThreshold: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: recordings
+              mountPath: /app/recordings
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: recordings
+          emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: voice-ai
+                topologyKey: kubernetes.io/hostname
+      tolerations:
+        - key: "voice-ai-only"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+
+---
+# ============================================
+# Service — ClusterIP (exposed via Ingress)
+# ============================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: voice-ai-service
+  namespace: dayjoy-voice-ai
+  labels:
+    app: voice-ai
+    app.kubernetes.io/name: dayjoy-voice-ai
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3001
+      targetPort: 3001
+      name: http
+      protocol: TCP
+    - port: 9090
+      targetPort: 9090
+      name: metrics
+      protocol: TCP
+  selector:
+    app: voice-ai
+
+---
+# ============================================
+# HorizontalPodAutoscaler — 3 to 10 replicas on CPU + memory
+# ============================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: voice-ai-hpa
+  namespace: dayjoy-voice-ai
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: voice-ai
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+      selectPolicy: Max
+
+---
+# ============================================
+# PodDisruptionBudget — keep at least 2 pods available
+# ============================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: voice-ai-pdb
+  namespace: dayjoy-voice-ai
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: voice-ai
+
+---
+# ============================================
+# NetworkPolicy — restrict ingress + egress
+# ============================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: voice-ai-network-policy
+  namespace: dayjoy-voice-ai
+spec:
+  podSelector:
+    matchLabels:
+      app: voice-ai
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow HTTP from nginx-ingress
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 3001
+    # Allow metrics scraping from monitoring namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow HTTPS to external APIs (Vapi, OpenAI, Twilio, etc.)
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+    # Allow PostgreSQL
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Allow Redis
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 6379
+
+---
+# ============================================
+# ServiceMonitor — Prometheus scraping
+# ============================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: voice-ai-monitor
+  namespace: dayjoy-voice-ai
+  labels:
+    app: voice-ai
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: voice-ai
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+      scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+      - dayjoy-voice-ai
+
+---
+# ============================================
+# Ingress — TLS via cert-manager
+# ============================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: voice-ai-ingress
+  namespace: dayjoy-voice-ai
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # Rate limit the webhook endpoint to prevent abuse
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/limit-burst: "100"
+spec:
+  tls:
+    - hosts:
+        - api.dayjoy.ai
+      secretName: voice-ai-tls
+  rules:
+    - host: api.dayjoy.ai
+      http:
+        paths:
+          - path: /api/voice
+            pathType: Prefix
+            backend:
+              service:
+                name: voice-ai-service
+                port:
+                  number: 3001
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: voice-ai-service
+                port:
+                  number: 3001
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: voice-ai-service
+                port:
+                  number: 9090
+
+---
+# ============================================
+# PrometheusRule — alerts for Voice AI
+# ============================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: voice-ai-alerts
+  namespace: dayjoy-voice-ai
+  labels:
+    app: voice-ai
+    release: prometheus
+spec:
+  groups:
+    - name: voice-ai.rules
+      rules:
+        - alert: VoiceAIHighErrorRate
+          expr: |
+            rate(http_requests_total{service="voice-ai",status=~"5.."}[5m])
+              / rate(http_requests_total{service="voice-ai"}[5m]) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+            team: voice-ai
+          annotations:
+            summary: "Voice AI error rate above 5%"
+            description: "Error rate is {{ $value | humanizePercentage }} for the last 5 minutes"
+
+        - alert: VoiceAIHighLatency
+          expr: |
+            histogram_quantile(0.95,
+              rate(http_request_duration_seconds_bucket{service="voice-ai"}[5m])
+            ) > 2
+          for: 5m
+          labels:
+            severity: warning
+            team: voice-ai
+          annotations:
+            summary: "Voice AI p95 latency above 2 seconds"
+
+        - alert: VoiceAIPodRestart
+          expr: |
+            rate(kube_pod_container_status_restarts_total{namespace="dayjoy-voice-ai"}[1h]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            team: voice-ai
+          annotations:
+            summary: "Voice AI pod restarting"
+
+        - alert: VoiceAIPodNotReady
+          expr: |
+            kube_pod_status_ready{namespace="dayjoy-voice-ai",condition="true"} == 0
+          for: 5m
+          labels:
+            severity: critical
+            team: voice-ai
+          annotations:
+            summary: "Voice AI pod not ready for 5+ minutes"

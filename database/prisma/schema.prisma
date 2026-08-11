@@ -1,0 +1,1894 @@
+// Dayjoy Enterprise AI Platform - Prisma Schema
+// PostgreSQL + Prisma ORM
+
+// 1. Datasource & Generator
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+// 2. Enums
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum CustomerType {
+  INDIVIDUAL
+  BUSINESS
+}
+
+enum DistributorStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+  DELETED
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+  RETURNED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  PARTIALLY_PAID
+  REFUNDED
+  FAILED
+}
+
+enum InventoryTxnReason {
+  PURCHASE
+  SALE
+  RETURN
+  ADJUSTMENT
+  TRANSFER
+  RESERVATION
+  RELEASE
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  CONVERTED
+  LOST
+  DELETED
+}
+
+enum InteractionType {
+  CALL
+  EMAIL
+  MEETING
+  MESSAGE
+  NOTE
+  OTHER
+}
+
+enum WorkflowType {
+  BUSINESS
+  AI
+  INTEGRATION
+  NOTIFICATION
+}
+
+enum WorkflowStatus {
+  ACTIVE
+  INACTIVE
+  DRAFT
+  ARCHIVED
+}
+
+enum ExecutionStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum NotificationType {
+  EMAIL
+  SMS
+  WHATSAPP
+  PUSH
+  IN_APP
+}
+
+enum NotificationPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum NotificationStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+enum ChannelType {
+  VOICE
+  WHATSAPP
+  WEB
+  API
+}
+
+enum AgentType {
+  SUPPORT
+  SALES
+  ONBOARDING
+  TECHNICAL
+  BILLING
+  DISTRIBUTOR
+  ADMIN
+  VOICE
+  WHATSAPP
+  WEB
+}
+
+enum MemoryType {
+  FACT
+  PREFERENCE
+  HISTORY
+  CONTEXT
+  SUMMARY
+}
+
+enum MetricType {
+  COUNT
+  SUM
+  AVERAGE
+  PERCENTAGE
+  RATIO
+}
+
+enum MetricUnit {
+  NUMBER
+  PERCENT
+  CURRENCY
+  DURATION
+}
+
+enum AuditAction {
+  INSERT
+  UPDATE
+  DELETE
+}
+
+// 3. Core Models
+
+model Tenant {
+  id        String       @id @default(uuid())
+  name      String
+  slug      String       @unique
+  status    TenantStatus @default(ACTIVE)
+  settings  Json?
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  users                   User[]
+  userSessions            UserSession[]
+  roles                   Role[]
+  userRoles               UserRole[]
+  customers               Customer[]
+  distributors            Distributor[]
+  employees               Employee[]
+  products                Product[]
+  productCategories       ProductCategory[]
+  orders                  Order[]
+  leads                   Lead[]
+  interactions            Interaction[]
+  followUps               FollowUp[]
+  agents                  AiAgent[]
+  conversations           Conversation[]
+  messages                Message[]
+  aiMemories              AiMemory[]
+  ragSources              RagSource[]
+  ragDocuments            RagDocument[]
+  ragChunks               RagChunk[]
+  ragEmbeddings           RagEmbedding[]
+  ragQueries              RagQuery[]
+  embeddings              Embedding[]
+  voiceSessions           VoiceSession[]
+  voiceRecordings         VoiceRecording[]
+  whatsappContacts        WhatsappContact[]
+  whatsappSessions        WhatsappSession[]
+  whatsappMessages        WhatsappMessage[]
+  webSessions             WebSession[]
+  webEvents               WebEvent[]
+  notificationTemplates   NotificationTemplate[]
+  notifications           Notification[]
+  notificationLogs        NotificationLog[]
+  workflows               Workflow[]
+  workflowSteps           WorkflowStep[]
+  workflowTriggers        WorkflowTrigger[]
+  workflowExecutions      WorkflowExecution[]
+  executionLogs           ExecutionLog[]
+  metrics                 Metric[]
+  metricValues            MetricValue[]
+  analyticsEvents         AnalyticsEvent[]
+  reports                 Report[]
+  reportSchedules         ReportSchedule[]
+  dashboards              Dashboard[]
+  dashboardWidgets        DashboardWidget[]
+  auditLogs               AuditLog[]
+  dataChanges             DataChange[]
+  accessLogs              AccessLog[]
+  complianceRecords       ComplianceRecord[]
+  retentionPolicies       RetentionPolicy[]
+  supportTickets          SupportTicket[]
+  appointments            Appointment[]
+  productReviews          ProductReview[]
+  knowledgeArticles       KnowledgeArticle[]
+  leadSources             LeadSource[]
+  integrations            Integration[]
+  webhookEvents           WebhookEvent[]
+  configs                 TenantConfig[]
+  passwordResetTokens     PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  distributorCommissions  DistributorCommission[]
+  // Domain back-relations (products / orders / notifications).
+  inventory               Inventory[]
+  inventoryTransactions   InventoryTransaction[]
+  shipments               Shipment[]
+  notificationPreferences NotificationPreference[]
+  orderItems              OrderItem[]
+
+  @@map("tenants")
+}
+
+model User {
+  id              String     @id @default(uuid())
+  tenant          Tenant     @relation(fields: [tenantId], references: [id])
+  tenantId        String     @map("tenant_id")
+  email           String
+  passwordHash    String?    @map("password_hash")
+  phone           String?
+  firstName       String?    @map("first_name")
+  lastName        String?    @map("last_name")
+  // Denormalized role for fast RBAC checks (kept in sync with UserRole join table).
+  role            String?    @default("user")
+  isEmailVerified Boolean    @default(false) @map("is_email_verified")
+  status          UserStatus @default(ACTIVE)
+  lastLoginAt     DateTime?  @map("last_login_at")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  sessions                UserSession[]
+  userRoles               UserRole[]
+  // 1-1 profile relations (a user may be linked to at most one employee record).
+  employee                Employee?
+  // 1-N relations.
+  customers               Customer[]
+  distributors            Distributor[]
+  interactions            Interaction[]
+  followUps               FollowUp[]
+  conversations           Conversation[]
+  aiMemories              AiMemory[]
+  workflows               Workflow[]
+  workflowExecutions      WorkflowExecution[]      @relation("ExecutionCreatedBy")
+  knowledgeArticles       KnowledgeArticle[]       @relation("KnowledgeArticleAuthor")
+  auditLogs               AuditLog[]
+  passwordResetTokens     PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  analyticsEvents         AnalyticsEvent[]
+  accessLogs              AccessLog[]
+  notifications           Notification[]
+  webSessions             WebSession[]
+  // Domain back-relations.
+  notificationPreferences NotificationPreference[]
+  inventoryTransactions   InventoryTransaction[]
+  // Assignment back-relations.
+  assignedLeads           Lead[]
+  assignedSupportTickets  SupportTicket[]
+  assignedAppointments    Appointment[]
+
+  // Email is unique per-tenant (not globally) — the same email address
+  // may exist in different tenants. Mirrors the SQL migration
+  // `021_fix_user_email_unique.sql` (was previously `email @unique`).
+  @@unique([tenantId, email])
+  @@map("users")
+}
+
+model UserSession {
+  id        String   @id @default(uuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String   @map("user_id")
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId  String   @map("tenant_id")
+  tokenHash String   @unique @map("token_hash")
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("user_sessions")
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId    String   @map("tenant_id")
+  name        String
+  description String?
+  isSystem    Boolean  @default(false) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+
+  @@unique([tenantId, name])
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  resource    String
+  action      String
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  rolePermissions RolePermission[]
+
+  @@unique([resource, action])
+  @@map("permissions")
+}
+
+model RolePermission {
+  role         Role       @relation(fields: [roleId], references: [id])
+  roleId       String     @map("role_id")
+  permission   Permission @relation(fields: [permissionId], references: [id])
+  permissionId String     @map("permission_id")
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  user       User      @relation(fields: [userId], references: [id])
+  userId     String    @map("user_id")
+  role       Role      @relation(fields: [roleId], references: [id])
+  roleId     String    @map("role_id")
+  tenant     Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId   String    @map("tenant_id")
+  assignedBy String?   @map("assigned_by")
+  assignedAt DateTime  @default(now()) @map("assigned_at")
+  expiresAt  DateTime? @map("expires_at")
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+// 4. Business Models
+
+model Customer {
+  id           String       @id @default(uuid())
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  tenantId     String       @map("tenant_id")
+  user         User?        @relation(fields: [userId], references: [id])
+  userId       String?      @map("user_id")
+  customerType CustomerType @default(INDIVIDUAL) @map("customer_type")
+  companyName  String?      @map("company_name")
+  firstName    String?      @map("first_name")
+  lastName     String?      @map("last_name")
+  email        String?
+  phone        String?
+  address      Json?
+  status       String       @default("active")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  orders           Order[]
+  interactions     Interaction[]
+  followUps        FollowUp[]
+  notifications    Notification[]
+  whatsappContacts WhatsappContact[]
+  webSessions      WebSession[]
+  analyticsEvents  AnalyticsEvent[]
+  supportTickets   SupportTicket[]
+  appointments     Appointment[]
+  productReviews   ProductReview[]
+  aiMemories       AiMemory[]
+  conversations    Conversation[]
+
+  @@index([tenantId, status])
+  @@map("customers")
+}
+
+model Distributor {
+  id              String            @id @default(uuid())
+  tenant          Tenant            @relation(fields: [tenantId], references: [id])
+  tenantId        String            @map("tenant_id")
+  user            User?             @relation(fields: [userId], references: [id])
+  userId          String?           @map("user_id")
+  distributorCode String            @unique @map("distributor_code")
+  companyName     String            @map("company_name")
+  contactPerson   String?           @map("contact_person")
+  email           String
+  phone           String?
+  address         Json?
+  commissionRate  Float?            @map("commission_rate")
+  status          DistributorStatus @default(ACTIVE)
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+
+  orders        Order[]
+  commissions   DistributorCommission[]
+  appointments  Appointment[]
+  notifications Notification[]
+
+  @@index([tenantId, status])
+  @@map("distributors")
+}
+
+model ProductCategory {
+  id          String           @id @default(uuid())
+  tenant      Tenant           @relation(fields: [tenantId], references: [id])
+  tenantId    String           @map("tenant_id")
+  parent      ProductCategory? @relation("CategoryChildren", fields: [parentId], references: [id])
+  parentId    String?          @map("parent_id")
+  name        String
+  slug        String
+  description String?
+  imageUrl    String?          @map("image_url")
+  sortOrder   Int              @default(0) @map("sort_order")
+  isActive    Boolean          @default(true) @map("is_active")
+  metadata    Json?
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+
+  children ProductCategory[] @relation("CategoryChildren")
+  products Product[]
+
+  @@unique([tenantId, slug])
+  @@map("product_categories")
+}
+
+model Product {
+  id               String           @id @default(uuid())
+  tenant           Tenant           @relation(fields: [tenantId], references: [id])
+  tenantId         String           @map("tenant_id")
+  category         ProductCategory? @relation(fields: [categoryId], references: [id])
+  categoryId       String?          @map("category_id")
+  sku              String
+  name             String
+  slug             String?
+  description      String?
+  shortDescription String?          @map("short_description")
+  price            Float
+  cost             Float?
+  compareAtPrice   Float?           @map("compare_at_price")
+  currency         String           @default("USD")
+  taxRate          Float            @default(0) @map("tax_rate")
+  inventoryCount   Int              @default(0) @map("inventory_count")
+  attributes       Json?
+  images           Json?
+  tags             String[]
+  status           ProductStatus    @default(ACTIVE)
+  metadata         Json?
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  orderItems            OrderItem[]
+  reviews               ProductReview[]
+  inventory             Inventory?
+  inventoryTransactions InventoryTransaction[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId, status])
+  @@map("products")
+}
+
+model Inventory {
+  id                String   @id @default(uuid())
+  tenant            Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId          String   @map("tenant_id")
+  product           Product  @relation(fields: [productId], references: [id])
+  productId         String   @unique @map("product_id")
+  quantity          Int      @default(0)
+  reserved          Int      @default(0)
+  lowStockThreshold Int      @default(10) @map("low_stock_threshold")
+  warehouseLocation String?  @map("warehouse_location")
+  metadata          Json?
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  transactions InventoryTransaction[]
+
+  @@index([tenantId, lowStockThreshold])
+  @@map("inventory")
+}
+
+model InventoryTransaction {
+  id             String             @id @default(uuid())
+  tenant         Tenant             @relation(fields: [tenantId], references: [id])
+  tenantId       String             @map("tenant_id")
+  product        Product            @relation(fields: [productId], references: [id])
+  productId      String             @map("product_id")
+  inventory      Inventory?         @relation(fields: [inventoryId], references: [id])
+  inventoryId    String?            @map("inventory_id")
+  quantityChange Int                @map("quantity_change")
+  reason         InventoryTxnReason
+  referenceType  String?            @map("reference_type")
+  referenceId    String?            @map("reference_id")
+  notes          String?
+  createdBy      User?              @relation(fields: [createdById], references: [id])
+  createdById    String?            @map("created_by_id")
+  createdAt      DateTime           @default(now()) @map("created_at")
+
+  @@index([tenantId, createdAt])
+  @@index([productId, createdAt])
+  @@map("inventory_transactions")
+}
+
+model Order {
+  id              String       @id @default(uuid())
+  tenant          Tenant       @relation(fields: [tenantId], references: [id])
+  tenantId        String       @map("tenant_id")
+  customer        Customer     @relation(fields: [customerId], references: [id])
+  customerId      String       @map("customer_id")
+  distributor     Distributor? @relation(fields: [distributorId], references: [id])
+  distributorId   String?      @map("distributor_id")
+  orderNumber     String       @unique @map("order_number")
+  status          OrderStatus  @default(PENDING)
+  subtotal        Float        @default(0)
+  tax             Float?       @default(0)
+  shipping        Float?       @default(0)
+  discount        Float?       @default(0)
+  total           Float        @default(0)
+  currency        String       @default("USD")
+  shippingAddress Json?        @map("shipping_address")
+  billingAddress  Json?        @map("billing_address")
+  paymentStatus   String       @default("PENDING") @map("payment_status")
+  paymentMethod   String?      @map("payment_method")
+  paymentId       String?      @map("payment_id")
+  notes           String?
+  placedAt        DateTime     @default(now()) @map("placed_at")
+  confirmedAt     DateTime?    @map("confirmed_at")
+  shippedAt       DateTime?    @map("shipped_at")
+  deliveredAt     DateTime?    @map("delivered_at")
+  cancelledAt     DateTime?    @map("cancelled_at")
+  metadata        Json?
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  items       OrderItem[]
+  commissions DistributorCommission[]
+  shipments   Shipment[]
+
+  @@index([tenantId, status])
+  @@index([customerId])
+  @@index([distributorId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id             String   @id @default(uuid())
+  tenant         Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId       String   @map("tenant_id")
+  order          Order    @relation(fields: [orderId], references: [id])
+  orderId        String   @map("order_id")
+  product        Product  @relation(fields: [productId], references: [id])
+  productId      String   @map("product_id")
+  productSku     String?  @map("product_sku")
+  productName    String?  @map("product_name")
+  quantity       Int      @default(1)
+  unitPrice      Float    @default(0) @map("unit_price")
+  taxRate        Float?   @default(0) @map("tax_rate")
+  taxAmount      Float?   @default(0) @map("tax_amount")
+  discountAmount Float?   @default(0) @map("discount_amount")
+  subtotal       Float    @default(0)
+  total          Float    @default(0)
+  metadata       Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([productId])
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model Shipment {
+  id                String    @id @default(uuid())
+  tenant            Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId          String    @map("tenant_id")
+  order             Order     @relation(fields: [orderId], references: [id])
+  orderId           String    @map("order_id")
+  trackingNumber    String?   @map("tracking_number")
+  carrier           String?
+  shippingMethod    String?   @map("shipping_method")
+  status            String    @default("CREATED")
+  shippedAt         DateTime? @map("shipped_at")
+  deliveredAt       DateTime? @map("delivered_at")
+  estimatedDelivery DateTime? @map("estimated_delivery")
+  cost              Float?
+  metadata          Json?
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@index([tenantId, createdAt])
+  @@index([orderId])
+  @@map("shipments")
+}
+
+model Lead {
+  id           String     @id @default(uuid())
+  tenant       Tenant     @relation(fields: [tenantId], references: [id])
+  tenantId     String     @map("tenant_id")
+  sourceId     String?    @map("source_id")
+  assignedTo   User?      @relation(fields: [assignedToId], references: [id])
+  assignedToId String?    @map("assigned_to_id")
+  firstName    String?    @map("first_name")
+  lastName     String?    @map("last_name")
+  email        String?
+  phone        String?
+  company      String?
+  status       LeadStatus @default(NEW)
+  score        Int        @default(0)
+  metadata     Json?
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  interactions Interaction[]
+  followUps    FollowUp[]
+
+  @@index([tenantId, status])
+  @@index([assignedToId])
+  @@map("leads")
+}
+
+model Interaction {
+  id               String          @id @default(uuid())
+  tenant           Tenant          @relation(fields: [tenantId], references: [id])
+  tenantId         String          @map("tenant_id")
+  customer         Customer?       @relation(fields: [customerId], references: [id])
+  customerId       String?         @map("customer_id")
+  lead             Lead?           @relation(fields: [leadId], references: [id])
+  leadId           String?         @map("lead_id")
+  user             User            @relation(fields: [userId], references: [id])
+  userId           String          @map("user_id")
+  type             InteractionType
+  subject          String?
+  description      String?
+  outcome          String?
+  followUpRequired Boolean         @default(false) @map("follow_up_required")
+  followUpDate     DateTime?       @map("follow_up_date")
+  metadata         Json?
+  createdAt        DateTime        @default(now()) @map("created_at")
+
+  followUps FollowUp[]
+
+  @@index([tenantId, createdAt])
+  @@index([customerId])
+  @@index([leadId])
+  @@index([userId])
+  @@map("interactions")
+}
+
+model FollowUp {
+  id            String          @id @default(uuid())
+  tenant        Tenant          @relation(fields: [tenantId], references: [id])
+  tenantId      String          @map("tenant_id")
+  interaction   Interaction?    @relation(fields: [interactionId], references: [id])
+  interactionId String?         @map("interaction_id")
+  assignedTo    User            @relation(fields: [assignedToId], references: [id])
+  assignedToId  String          @map("assigned_to_id")
+  customer      Customer?       @relation(fields: [customerId], references: [id])
+  customerId    String?         @map("customer_id")
+  lead          Lead?           @relation(fields: [leadId], references: [id])
+  leadId        String?         @map("lead_id")
+  type          InteractionType
+  subject       String
+  description   String?
+  status        String          @default("pending")
+  dueDate       DateTime        @map("due_date")
+  completedAt   DateTime?       @map("completed_at")
+  metadata      Json?
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+
+  @@map("follow_ups")
+}
+
+// 5. AI Models
+
+model AiAgent {
+  id            String    @id @default(uuid())
+  tenant        Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId      String    @map("tenant_id")
+  name          String
+  type          AgentType
+  description   String?
+  configuration Json?
+  capabilities  Json?
+  status        String    @default("active")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  conversations Conversation[]
+  memories      AiMemory[]
+  ragQueries    RagQuery[]
+
+  @@map("ai_agents")
+}
+
+model Conversation {
+  id         String      @id @default(uuid())
+  tenant     Tenant      @relation(fields: [tenantId], references: [id])
+  tenantId   String      @map("tenant_id")
+  agent      AiAgent     @relation(fields: [agentId], references: [id])
+  agentId    String      @map("agent_id")
+  user       User?       @relation(fields: [userId], references: [id])
+  userId     String?     @map("user_id")
+  customer   Customer?   @relation(fields: [customerId], references: [id])
+  customerId String?     @map("customer_id")
+  channel    ChannelType
+  sessionId  String?     @map("session_id")
+  status     String      @default("active")
+  context    Json?
+  metadata   Json?
+  startedAt  DateTime    @default(now()) @map("started_at")
+  endedAt    DateTime?   @map("ended_at")
+  createdAt  DateTime    @default(now()) @map("created_at")
+  updatedAt  DateTime    @updatedAt @map("updated_at")
+
+  messages         Message[]
+  ragQueries       RagQuery[]
+  voiceSessions    VoiceSession[]
+  whatsappSessions WhatsappSession[]
+  whatsappMessages WhatsappMessage[]
+  webSessions      WebSession[]
+
+  @@index([tenantId, startedAt])
+  @@index([agentId, startedAt])
+  @@map("conversations")
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  tenant         Tenant       @relation(fields: [tenantId], references: [id])
+  tenantId       String       @map("tenant_id")
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  conversationId String       @map("conversation_id")
+  role           String // user, assistant, system
+  content        String
+  contentType    String       @map("content_type") // text, markdown, audio, image
+  metadata       Json?
+  tokensUsed     Int?         @map("tokens_used")
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+model AiMemory {
+  id         String     @id @default(uuid())
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  tenantId   String     @map("tenant_id")
+  agent      AiAgent?   @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  agentId    String?    @map("agent_id")
+  user       User?      @relation(fields: [userId], references: [id])
+  userId     String?    @map("user_id")
+  customer   Customer?  @relation(fields: [customerId], references: [id])
+  customerId String?    @map("customer_id")
+  type       MemoryType
+  key        String
+  value      String
+  importance Int        @default(5)
+  expiresAt  DateTime?  @map("expires_at")
+  metadata   Json?
+  createdAt  DateTime   @default(now()) @map("created_at")
+  updatedAt  DateTime   @updatedAt @map("updated_at")
+
+  @@map("ai_memory")
+}
+
+model RagSource {
+  id            String   @id @default(uuid())
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId      String   @map("tenant_id")
+  name          String
+  type          String // document, website, database, api, manual
+  description   String?
+  configuration Json?
+  status        String   @default("active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  documents RagDocument[]
+
+  @@map("rag_sources")
+}
+
+model RagDocument {
+  id          String    @id @default(uuid())
+  tenant      Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId    String    @map("tenant_id")
+  source      RagSource @relation(fields: [sourceId], references: [id])
+  sourceId    String    @map("source_id")
+  title       String
+  content     String?
+  metadata    Json?
+  wordCount   Int?      @map("word_count")
+  status      String    @default("processed")
+  processedAt DateTime? @map("processed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  chunks RagChunk[]
+
+  @@map("rag_documents")
+}
+
+model RagChunk {
+  id         String                       @id @default(uuid())
+  tenant     Tenant                       @relation(fields: [tenantId], references: [id])
+  tenantId   String                       @map("tenant_id")
+  document   RagDocument                  @relation(fields: [documentId], references: [id])
+  documentId String                       @map("document_id")
+  chunkIndex Int                          @map("chunk_index")
+  content    String
+  // pgvector: native vector(1536) type. Requires `extensions = [vector]` on datasource.
+  embedding  Unsupported("vector(1536)")?
+  metadata   Json?
+  createdAt  DateTime                     @default(now()) @map("created_at")
+
+  embeddings RagEmbedding[]
+
+  @@index([documentId])
+  @@index([tenantId])
+  @@map("rag_chunks")
+}
+
+model Embedding {
+  id         String   @id @default(uuid())
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId   String   @map("tenant_id")
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  embedding  Bytes
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@map("embeddings")
+}
+
+// 6. Channels Models
+
+model VoiceSession {
+  id              String        @id @default(uuid())
+  tenant          Tenant        @relation(fields: [tenantId], references: [id])
+  tenantId        String        @map("tenant_id")
+  conversation    Conversation? @relation(fields: [conversationId], references: [id])
+  conversationId  String?       @map("conversation_id")
+  callId          String        @unique @map("call_id")
+  phoneNumber     String?       @map("phone_number")
+  status          String        @default("active")
+  durationSeconds Int?          @map("duration_seconds")
+  recordingUrl    String?       @map("recording_url")
+  metadata        Json?
+  startedAt       DateTime      @default(now()) @map("started_at")
+  endedAt         DateTime?     @map("ended_at")
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  recordings  VoiceRecording[]
+  transcripts VoiceTranscript[]
+  analytics   VoiceAnalytics?
+
+  @@map("voice_sessions")
+}
+
+model VoiceRecording {
+  id              String       @id @default(uuid())
+  tenant          Tenant       @relation(fields: [tenantId], references: [id])
+  tenantId        String       @map("tenant_id")
+  session         VoiceSession @relation(fields: [sessionId], references: [id])
+  sessionId       String       @map("session_id")
+  recordingUrl    String       @map("recording_url")
+  durationSeconds Int?         @map("duration_seconds")
+  fileSizeBytes   Int?         @map("file_size_bytes")
+  format          String?
+  transcription   String?
+  metadata        Json?
+  createdAt       DateTime     @default(now()) @map("created_at")
+
+  @@map("voice_recordings")
+}
+
+model WhatsappContact {
+  id                String    @id @default(uuid())
+  tenant            Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId          String    @map("tenant_id")
+  customer          Customer? @relation(fields: [customerId], references: [id])
+  customerId        String?   @map("customer_id")
+  phoneNumber       String    @unique @map("phone_number")
+  name              String?
+  profilePictureUrl String?   @map("profile_picture_url")
+  status            String    @default("active")
+  metadata          Json?
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  sessions WhatsappSession[]
+  messages WhatsappMessage[]
+
+  @@map("whatsapp_contacts")
+}
+
+model WhatsappSession {
+  id             String          @id @default(uuid())
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
+  tenantId       String          @map("tenant_id")
+  contact        WhatsappContact @relation(fields: [contactId], references: [id])
+  contactId      String          @map("contact_id")
+  conversation   Conversation?   @relation(fields: [conversationId], references: [id])
+  conversationId String?         @map("conversation_id")
+  sessionId      String          @unique @map("session_id")
+  status         String          @default("active")
+  metadata       Json?
+  startedAt      DateTime        @default(now()) @map("started_at")
+  endedAt        DateTime?       @map("ended_at")
+  createdAt      DateTime        @default(now()) @map("created_at")
+
+  messages WhatsappMessage[]
+
+  @@map("whatsapp_sessions")
+}
+
+model WhatsappMessage {
+  id             String          @id @default(uuid())
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
+  tenantId       String          @map("tenant_id")
+  session        WhatsappSession @relation(fields: [sessionId], references: [id])
+  sessionId      String          @map("session_id")
+  contact        WhatsappContact @relation(fields: [contactId], references: [id])
+  contactId      String          @map("contact_id")
+  conversation   Conversation?   @relation(fields: [conversationId], references: [id])
+  conversationId String?         @map("conversation_id")
+  messageId      String          @unique @map("message_id")
+  direction      String // inbound, outbound
+  type           String // text, image, audio, etc.
+  content        String?
+  mediaUrl       String?         @map("media_url")
+  status         String          @default("sent")
+  metadata       Json?
+  createdAt      DateTime        @default(now()) @map("created_at")
+
+  @@map("whatsapp_messages")
+}
+
+model WebSession {
+  id             String        @id @default(uuid())
+  tenant         Tenant        @relation(fields: [tenantId], references: [id])
+  tenantId       String        @map("tenant_id")
+  conversation   Conversation? @relation(fields: [conversationId], references: [id])
+  conversationId String?       @map("conversation_id")
+  sessionId      String        @unique @map("session_id")
+  user           User?         @relation(fields: [userId], references: [id])
+  userId         String?       @map("user_id")
+  customer       Customer?     @relation(fields: [customerId], references: [id])
+  customerId     String?       @map("customer_id")
+  ipAddress      String?       @map("ip_address")
+  userAgent      String?       @map("user_agent")
+  referrer       String?
+  landingPage    String?       @map("landing_page")
+  status         String        @default("active")
+  metadata       Json?
+  startedAt      DateTime      @default(now()) @map("started_at")
+  endedAt        DateTime?     @map("ended_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  events          WebEvent[]
+  analyticsEvents AnalyticsEvent[]
+
+  @@map("web_sessions")
+}
+
+model WebEvent {
+  id        String     @id @default(uuid())
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  tenantId  String     @map("tenant_id")
+  session   WebSession @relation(fields: [sessionId], references: [id])
+  sessionId String     @map("session_id")
+  eventType String     @map("event_type")
+  eventName String     @map("event_name")
+  eventData Json       @map("event_data")
+  url       String?
+  metadata  Json?
+  createdAt DateTime   @default(now()) @map("created_at")
+
+  @@map("web_events")
+}
+
+model NotificationTemplate {
+  id              String           @id @default(uuid())
+  tenant          Tenant           @relation(fields: [tenantId], references: [id])
+  tenantId        String           @map("tenant_id")
+  code            String
+  name            String
+  type            NotificationType
+  subject         String?
+  subjectTemplate String?          @map("subject_template")
+  body            String
+  bodyHtml        String?          @map("body_html")
+  contentTemplate String?          @map("content_template")
+  variables       Json?
+  isActive        Boolean          @default(true) @map("is_active")
+  status          String           @default("active")
+  metadata        Json?
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  notifications Notification[]
+
+  @@unique([tenantId, code])
+  @@map("notification_templates")
+}
+
+model Notification {
+  id                String                @id @default(uuid())
+  tenant            Tenant                @relation(fields: [tenantId], references: [id])
+  tenantId          String                @map("tenant_id")
+  user              User?                 @relation(fields: [userId], references: [id])
+  userId            String?               @map("user_id")
+  customer          Customer?             @relation(fields: [customerId], references: [id])
+  customerId        String?               @map("customer_id")
+  distributor       Distributor?          @relation(fields: [distributorId], references: [id])
+  distributorId     String?               @map("distributor_id")
+  type              NotificationType
+  priority          NotificationPriority  @default(NORMAL)
+  subject           String?
+  content           String
+  body              String?
+  bodyHtml          String?               @map("body_html")
+  recipient         String?
+  template          NotificationTemplate? @relation(fields: [templateId], references: [id])
+  templateId        String?               @map("template_id")
+  status            NotificationStatus    @default(PENDING)
+  provider          String?
+  providerMessageId String?               @map("provider_message_id")
+  errorCode         String?               @map("error_code")
+  errorMessage      String?               @map("error_message")
+  retryCount        Int                   @default(0) @map("retry_count")
+  maxRetries        Int                   @default(3) @map("max_retries")
+  scheduledAt       DateTime?             @map("scheduled_at")
+  sentAt            DateTime?             @map("sent_at")
+  deliveredAt       DateTime?             @map("delivered_at")
+  readAt            DateTime?             @map("read_at")
+  metadata          Json?
+  createdAt         DateTime              @default(now()) @map("created_at")
+  updatedAt         DateTime              @updatedAt @map("updated_at")
+
+  logs NotificationLog[]
+
+  @@index([tenantId, createdAt])
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@map("notifications")
+}
+
+model NotificationLog {
+  id             String           @id @default(uuid())
+  tenant         Tenant           @relation(fields: [tenantId], references: [id])
+  tenantId       String           @map("tenant_id")
+  notification   Notification     @relation(fields: [notificationId], references: [id])
+  notificationId String           @map("notification_id")
+  channel        NotificationType
+  event          String?
+  status         String
+  provider       String?
+  errorMessage   String?          @map("error_message")
+  response       Json?
+  latencyMs      Int?             @map("latency_ms")
+  attempts       Int              @default(1)
+  sentAt         DateTime?        @map("sent_at")
+  metadata       Json?
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  @@index([notificationId, createdAt])
+  @@map("notification_logs")
+}
+
+model NotificationPreference {
+  id              String           @id @default(uuid())
+  tenant          Tenant           @relation(fields: [tenantId], references: [id])
+  tenantId        String           @map("tenant_id")
+  user            User             @relation(fields: [userId], references: [id])
+  userId          String           @map("user_id")
+  channel         NotificationType
+  enabled         Boolean          @default(true)
+  categories      Json?
+  quietHoursStart String?          @map("quiet_hours_start")
+  quietHoursEnd   String?          @map("quiet_hours_end")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  @@unique([userId, channel])
+  @@map("notification_preferences")
+}
+
+// 7. Automation Models
+
+model Workflow {
+  id          String         @id @default(uuid())
+  tenant      Tenant         @relation(fields: [tenantId], references: [id])
+  tenantId    String         @map("tenant_id")
+  name        String
+  description String?
+  type        WorkflowType
+  definition  Json
+  version     Int            @default(1)
+  status      WorkflowStatus @default(DRAFT)
+  createdBy   User           @relation(fields: [createdById], references: [id])
+  createdById String         @map("created_by_id")
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+
+  steps      WorkflowStep[]
+  triggers   WorkflowTrigger[]
+  executions WorkflowExecution[]
+
+  @@unique([tenantId, name])
+  @@map("workflows")
+}
+
+model WorkflowStep {
+  id            String   @id @default(uuid())
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId      String   @map("tenant_id")
+  workflow      Workflow @relation(fields: [workflowId], references: [id])
+  workflowId    String   @map("workflow_id")
+  stepIndex     Int      @map("step_index")
+  name          String
+  type          String // action, condition, loop, wait, trigger
+  configuration Json
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  executionLogs ExecutionLog[]
+
+  @@unique([workflowId, stepIndex])
+  @@map("workflow_steps")
+}
+
+model WorkflowTrigger {
+  id             String   @id @default(uuid())
+  tenant         Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId       String   @map("tenant_id")
+  workflow       Workflow @relation(fields: [workflowId], references: [id])
+  workflowId     String   @map("workflow_id")
+  type           String // event, schedule, api, manual
+  eventType      String?  @map("event_type")
+  cronExpression String?  @map("cron_expression")
+  configuration  Json?
+  status         String   @default("active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  executions WorkflowExecution[]
+
+  @@map("workflow_triggers")
+}
+
+model WorkflowExecution {
+  id           String           @id @default(uuid())
+  tenant       Tenant           @relation(fields: [tenantId], references: [id])
+  tenantId     String           @map("tenant_id")
+  workflow     Workflow         @relation(fields: [workflowId], references: [id])
+  workflowId   String           @map("workflow_id")
+  trigger      WorkflowTrigger? @relation(fields: [triggerId], references: [id])
+  triggerId    String?          @map("trigger_id")
+  createdBy    User?            @relation("ExecutionCreatedBy", fields: [createdById], references: [id])
+  createdById  String?          @map("created_by_id")
+  status       ExecutionStatus  @default(PENDING)
+  inputData    Json?            @map("input_data")
+  outputData   Json?            @map("output_data")
+  errorMessage String?          @map("error_message")
+  startedAt    DateTime         @default(now()) @map("started_at")
+  completedAt  DateTime?        @map("completed_at")
+  durationMs   Int?             @map("duration_ms")
+  metadata     Json?
+
+  logs ExecutionLog[]
+
+  @@map("workflow_executions")
+}
+
+model ExecutionLog {
+  id          String            @id @default(uuid())
+  tenant      Tenant            @relation(fields: [tenantId], references: [id])
+  tenantId    String            @map("tenant_id")
+  execution   WorkflowExecution @relation(fields: [executionId], references: [id])
+  executionId String            @map("execution_id")
+  step        WorkflowStep?     @relation(fields: [stepId], references: [id])
+  stepId      String?           @map("step_id")
+  level       String // debug, info, warn, error
+  message     String
+  data        Json?
+  createdAt   DateTime          @default(now()) @map("created_at")
+
+  @@map("execution_logs")
+}
+
+// 8. Analytics Models
+
+model Metric {
+  id              String     @id @default(uuid())
+  tenant          Tenant     @relation(fields: [tenantId], references: [id])
+  tenantId        String     @map("tenant_id")
+  name            String
+  description     String?
+  type            MetricType
+  unit            MetricUnit
+  category        String?
+  query           String
+  refreshInterval Int        @default(300) @map("refresh_interval")
+  status          String     @default("active")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  values MetricValue[]
+
+  @@unique([tenantId, name])
+  @@map("metrics")
+}
+
+model MetricValue {
+  id         String   @id @default(uuid())
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId   String   @map("tenant_id")
+  metric     Metric   @relation(fields: [metricId], references: [id])
+  metricId   String   @map("metric_id")
+  value      Float
+  dimensions Json?
+  timestamp  DateTime
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@map("metric_values")
+}
+
+model AnalyticsEvent {
+  id         String      @id @default(uuid())
+  tenant     Tenant      @relation(fields: [tenantId], references: [id])
+  tenantId   String      @map("tenant_id")
+  eventType  String      @map("event_type")
+  user       User?       @relation(fields: [userId], references: [id])
+  userId     String?     @map("user_id")
+  customer   Customer?   @relation(fields: [customerId], references: [id])
+  customerId String?     @map("customer_id")
+  session    WebSession? @relation(fields: [sessionId], references: [id])
+  sessionId  String?     @map("session_id")
+  eventData  Json        @map("event_data")
+  metadata   Json?
+  timestamp  DateTime
+
+  @@map("analytics_events")
+}
+
+model Report {
+  id          String   @id @default(uuid())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId    String   @map("tenant_id")
+  name        String
+  description String?
+  type        String // table, chart, dashboard, export
+  query       String
+  parameters  Json?
+  status      String   @default("active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  schedules ReportSchedule[]
+  widgets   DashboardWidget[]
+
+  @@unique([tenantId, name])
+  @@map("reports")
+}
+
+model ReportSchedule {
+  id             String    @id @default(uuid())
+  tenant         Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId       String    @map("tenant_id")
+  report         Report    @relation(fields: [reportId], references: [id])
+  reportId       String    @map("report_id")
+  scheduleType   String    @map("schedule_type") // hourly, daily, weekly, monthly, custom
+  cronExpression String?   @map("cron_expression")
+  recipients     Json?
+  format         String // pdf, csv, xlsx, json
+  status         String    @default("active")
+  lastRunAt      DateTime? @map("last_run_at")
+  nextRunAt      DateTime? @map("next_run_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@map("report_schedules")
+}
+
+model Dashboard {
+  id          String   @id @default(uuid())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId    String   @map("tenant_id")
+  name        String
+  description String?
+  layout      Json?
+  status      String   @default("active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  widgets DashboardWidget[]
+
+  @@unique([tenantId, name])
+  @@map("dashboards")
+}
+
+model DashboardWidget {
+  id            String    @id @default(uuid())
+  tenant        Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId      String    @map("tenant_id")
+  dashboard     Dashboard @relation(fields: [dashboardId], references: [id])
+  dashboardId   String    @map("dashboard_id")
+  report        Report?   @relation(fields: [reportId], references: [id])
+  reportId      String?   @map("report_id")
+  type          String // chart, table, metric, text
+  title         String?
+  configuration Json?
+  position      Json?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@map("dashboard_widgets")
+}
+
+// 9. Audit Models
+
+model AuditLog {
+  id           String      @id @default(uuid())
+  tenant       Tenant      @relation(fields: [tenantId], references: [id])
+  tenantId     String      @map("tenant_id")
+  user         User?       @relation(fields: [userId], references: [id])
+  userId       String?     @map("user_id")
+  action       AuditAction
+  resourceType String      @map("resource_type")
+  resourceId   String?     @map("resource_id")
+  oldValues    Json?       @map("old_values")
+  newValues    Json?       @map("new_values")
+  ipAddress    String?     @map("ip_address")
+  userAgent    String?     @map("user_agent")
+  sessionId    String?     @map("session_id")
+  metadata     Json?
+  createdAt    DateTime    @default(now()) @map("created_at")
+
+  @@map("audit_logs")
+}
+
+model DataChange {
+  id        String      @id @default(uuid())
+  tenant    Tenant      @relation(fields: [tenantId], references: [id])
+  tenantId  String      @map("tenant_id")
+  tableName String      @map("table_name")
+  recordId  String      @map("record_id")
+  operation AuditAction
+  oldValues Json?       @map("old_values")
+  newValues Json?       @map("new_values")
+  changedBy String?     @map("changed_by")
+  changedAt DateTime    @default(now()) @map("changed_at")
+  metadata  Json?
+
+  @@map("data_changes")
+}
+
+model AccessLog {
+  id           String   @id @default(uuid())
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId     String   @map("tenant_id")
+  user         User?    @relation(fields: [userId], references: [id])
+  userId       String?  @map("user_id")
+  resourceType String   @map("resource_type")
+  resourceId   String?  @map("resource_id")
+  action       String
+  ipAddress    String?  @map("ip_address")
+  userAgent    String?  @map("user_agent")
+  result       String // success, denied, error
+  errorMessage String?  @map("error_message")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("access_logs")
+}
+
+model ComplianceRecord {
+  id          String    @id @default(uuid())
+  tenant      Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId    String    @map("tenant_id")
+  type        String // gdpr, hipaa, sox, pci, other
+  subject     String
+  description String?
+  evidence    Json?
+  status      String // compliant, non_compliant, remediation
+  reviewDate  DateTime? @map("review_date")
+  reviewedBy  String?   @map("reviewed_by")
+  metadata    Json?
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@map("compliance_records")
+}
+
+model RetentionPolicy {
+  id               String   @id @default(uuid())
+  tenant           Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId         String   @map("tenant_id")
+  resourceType     String   @map("resource_type")
+  retentionDays    Int      @map("retention_days")
+  archiveEnabled   Boolean  @default(false) @map("archive_enabled")
+  archiveAfterDays Int?     @map("archive_after_days")
+  deleteEnabled    Boolean  @default(false) @map("delete_enabled")
+  deleteAfterDays  Int?     @map("delete_after_days")
+  status           String   @default("active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, resourceType])
+  @@map("retention_policies")
+}
+
+// ============================================================
+// VOICE AI EXTENSION (Vapi-specific)
+// Source: vapi-database-schema.prisma
+// ============================================================
+
+enum VoiceCallStatus {
+  INITIATED
+  RINGING
+  IN_PROGRESS
+  ENDED
+  FAILED
+  CANCELLED
+}
+
+enum VoiceCallDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum VoiceCallOutcome {
+  COMPLETED
+  TRANSFERRED
+  ABANDONED
+  FAILED
+  VOICEMAIL
+}
+
+enum TranscriptRole {
+  USER
+  ASSISTANT
+  SYSTEM
+  TOOL
+}
+
+model VoiceTranscript {
+  id         String         @id @default(uuid())
+  session    VoiceSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId  String         @map("session_id")
+  role       TranscriptRole
+  content    String         @db.Text
+  tokensUsed Int?           @map("tokens_used")
+  confidence Float?
+  metadata   Json?
+  createdAt  DateTime       @default(now()) @map("created_at")
+
+  @@index([sessionId, createdAt])
+  @@map("voice_transcripts")
+}
+
+model VoiceAnalytics {
+  id                    String            @id @default(uuid())
+  session               VoiceSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId             String            @unique @map("session_id")
+  durationSeconds       Int               @map("duration_seconds")
+  silenceDurationMs     Int               @default(0) @map("silence_duration_ms")
+  talkTimeMs            Int               @default(0) @map("talk_time_ms")
+  toolCallsCount        Int               @default(0) @map("tool_calls_count")
+  humanHandoffTriggered Boolean           @default(false) @map("human_handoff_triggered")
+  aiAccuracyScore       Float?            @map("ai_accuracy_score") // 0-100
+  customerSatisfaction  Float?            @map("customer_satisfaction") // 1-5 CSAT
+  sentimentScore        Float?            @map("sentiment_score") // -1 to 1
+  intentDetected        String?           @map("intent_detected")
+  outcome               VoiceCallOutcome?
+  costUsd               Float?            @map("cost_usd")
+  metadata              Json?
+  createdAt             DateTime          @default(now()) @map("created_at")
+
+  @@map("voice_analytics")
+}
+
+// ============================================================
+// RAG EXTENSION (pgvector)
+// Note: Requires `extensions: [vector]` in datasource for full pgvector.
+// The Embedding model in the canonical schema stores Bytes; this is
+// an alternative model with native vector type (requires Prisma 6+
+// with postgresqlExtensions preview feature).
+// ============================================================
+
+model RagEmbedding {
+  id         String                       @id @default(uuid())
+  tenant     Tenant                       @relation(fields: [tenantId], references: [id])
+  tenantId   String                       @map("tenant_id")
+  chunk      RagChunk                     @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+  chunkId    String                       @map("chunk_id")
+  // pgvector: native vector(1536) type. Requires `extensions = [vector]` on datasource
+  // and `previewFeatures = ["postgresqlExtensions"]` on the generator.
+  embedding  Unsupported("vector(1536)")?
+  model      String // text-embedding-3-small, bge-large, etc.
+  dimensions Int                          @default(1536)
+  createdAt  DateTime                     @default(now()) @map("created_at")
+
+  @@unique([chunkId, model])
+  @@index([tenantId])
+  @@map("rag_embeddings")
+}
+
+model RagQuery {
+  id                String                       @id @default(uuid())
+  tenant            Tenant                       @relation(fields: [tenantId], references: [id])
+  tenantId          String                       @map("tenant_id")
+  agent             AiAgent?                     @relation(fields: [agentId], references: [id])
+  agentId           String?                      @map("agent_id")
+  conversation      Conversation?                @relation(fields: [conversationId], references: [id])
+  conversationId    String?                      @map("conversation_id")
+  queryText         String                       @map("query_text") @db.Text
+  queryEmbedding    Unsupported("vector(1536)")? @map("query_embedding")
+  retrievedChunkIds String[]                     @map("retrieved_chunk_ids")
+  responseText      String?                      @map("response_text") @db.Text
+  latencyMs         Int?                         @map("latency_ms")
+  confidence        Float?
+  feedback          String? // positive, negative, neutral
+  createdAt         DateTime                     @default(now()) @map("created_at")
+
+  @@index([tenantId, createdAt])
+  @@index([agentId])
+  @@map("rag_queries")
+}
+
+// ============================================================
+// WHATSAPP EXTENSION
+// ============================================================
+
+enum WhatsAppMessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  TEMPLATE
+  INTERACTIVE
+  LOCATION
+  CONTACTS
+}
+
+enum WhatsAppMessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  RECEIVED
+}
+
+enum WhatsAppDirection {
+  INBOUND
+  OUTBOUND
+}
+
+// ============================================================
+// NOTIFICATION EXTENSION
+// ============================================================
+
+enum NotificationProvider {
+  EMAIL
+  SMS
+  WHATSAPP
+  PUSH
+  IN_APP
+  WEBHOOK
+}
+
+// ============================================================
+// ADDITIONAL BUSINESS ENTITIES
+// (Tables referenced in data dictionary but not yet in canonical schema)
+// ============================================================
+
+model SupportTicket {
+  id           String    @id @default(uuid())
+  tenant       Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId     String    @map("tenant_id")
+  customer     Customer? @relation(fields: [customerId], references: [id])
+  customerId   String?   @map("customer_id")
+  assignedTo   User?     @relation(fields: [assignedToId], references: [id])
+  assignedToId String?   @map("assigned_to_id")
+  subject      String
+  description  String    @db.Text
+  priority     String    @default("medium") // low, medium, high, urgent
+  status       String    @default("open") // open, in_progress, resolved, closed
+  category     String?
+  channel      String? // voice, whatsapp, email, web
+  resolution   String?   @db.Text
+  resolvedAt   DateTime? @map("resolved_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@index([tenantId, status])
+  @@index([customerId])
+  @@index([assignedToId])
+  @@map("support_tickets")
+}
+
+model Appointment {
+  id              String       @id @default(uuid())
+  tenant          Tenant       @relation(fields: [tenantId], references: [id])
+  tenantId        String       @map("tenant_id")
+  customer        Customer?    @relation(fields: [customerId], references: [id])
+  customerId      String?      @map("customer_id")
+  distributor     Distributor? @relation(fields: [distributorId], references: [id])
+  distributorId   String?      @map("distributor_id")
+  assignedTo      User?        @relation(fields: [assignedToId], references: [id])
+  assignedToId    String?      @map("assigned_to_id")
+  title           String
+  description     String?
+  scheduledAt     DateTime     @map("scheduled_at")
+  durationMinutes Int          @default(30) @map("duration_minutes")
+  location        String?
+  meetingLink     String?      @map("meeting_link")
+  status          String       @default("scheduled") // scheduled, completed, cancelled, no_show
+  metadata        Json?
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  @@index([tenantId, scheduledAt])
+  @@index([customerId])
+  @@index([distributorId])
+  @@map("appointments")
+}
+
+model ProductReview {
+  id         String    @id @default(uuid())
+  tenant     Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId   String    @map("tenant_id")
+  product    Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId  String    @map("product_id")
+  customer   Customer? @relation(fields: [customerId], references: [id])
+  customerId String?   @map("customer_id")
+  rating     Int // 1-5
+  title      String?
+  body       String?   @db.Text
+  verified   Boolean   @default(false)
+  metadata   Json?
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  @@unique([productId, customerId])
+  @@index([tenantId, rating])
+  @@map("product_reviews")
+}
+
+model DistributorCommission {
+  id            String      @id @default(uuid())
+  tenant        Tenant      @relation(fields: [tenantId], references: [id])
+  tenantId      String      @map("tenant_id")
+  distributor   Distributor @relation(fields: [distributorId], references: [id])
+  distributorId String      @map("distributor_id")
+  order         Order?      @relation(fields: [orderId], references: [id])
+  orderId       String?     @map("order_id")
+  amount        Decimal     @db.Decimal(12, 2)
+  currency      String      @default("INR")
+  status        String      @default("pending") // pending, paid, cancelled
+  paidAt        DateTime?   @map("paid_at")
+  metadata      Json?
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+
+  @@index([distributorId, status])
+  @@map("distributor_commissions")
+}
+
+model KnowledgeArticle {
+  id           String    @id @default(uuid())
+  tenant       Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId     String    @map("tenant_id")
+  title        String
+  slug         String
+  content      String    @db.Text
+  excerpt      String?   @db.Text
+  category     String?
+  tags         String[]
+  author       User?     @relation("KnowledgeArticleAuthor", fields: [authorId], references: [id])
+  authorId     String?   @map("author_id")
+  status       String    @default("draft") // draft, published, archived
+  viewCount    Int       @default(0) @map("view_count")
+  helpfulCount Int       @default(0) @map("helpful_count")
+  metadata     Json?
+  publishedAt  DateTime? @map("published_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@unique([tenantId, slug])
+  @@index([tenantId, status])
+  @@map("knowledge_articles")
+}
+
+model LeadSource {
+  id          String   @id @default(uuid())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId    String   @map("tenant_id")
+  name        String
+  description String?
+  channel     String? // voice, whatsapp, web, referral, social
+  costPerLead Float?   @map("cost_per_lead")
+  metadata    Json?
+  status      String   @default("active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, name])
+  @@map("lead_sources")
+}
+
+model Integration {
+  id          String    @id @default(uuid())
+  tenant      Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId    String    @map("tenant_id")
+  name        String
+  type        String // vapi, twilio, whatsapp, stripe, sendgrid, etc.
+  config      Json
+  credentials Json? // encrypted
+  status      String    @default("active") // active, inactive, error
+  lastSyncAt  DateTime? @map("last_sync_at")
+  metadata    Json?
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@unique([tenantId, type, name])
+  @@map("integrations")
+}
+
+model WebhookEvent {
+  id          String    @id @default(uuid())
+  tenant      Tenant?   @relation(fields: [tenantId], references: [id])
+  tenantId    String?   @map("tenant_id")
+  source      String // vapi, twilio, whatsapp, stripe
+  eventType   String    @map("event_type")
+  payload     Json
+  signature   String?
+  processed   Boolean   @default(false)
+  processedAt DateTime? @map("processed_at")
+  error       String?   @db.Text
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([source, eventType, createdAt])
+  @@index([processed, createdAt])
+  @@map("webhook_events")
+}
+
+// ============================================================
+// EXTENDED CORE MODELS
+// (Added in Phase 2 schema fix: TenantConfig, Employee,
+//  PasswordResetToken, EmailVerificationToken)
+// ============================================================
+
+model TenantConfig {
+  id          String   @id @default(uuid())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId    String   @map("tenant_id")
+  key         String
+  value       String   @db.Text
+  category    String?
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, key])
+  @@index([tenantId, category])
+  @@map("tenant_configs")
+}
+
+model Employee {
+  id           String    @id @default(uuid())
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId     String    @map("tenant_id")
+  user         User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId       String?   @unique @map("user_id")
+  employeeCode String    @unique @map("employee_code")
+  firstName    String?   @map("first_name")
+  lastName     String?   @map("last_name")
+  email        String?
+  phone        String?
+  department   String?
+  designation  String?
+  reportsTo    String?   @map("reports_to")
+  status       String    @default("active") // active, inactive, suspended
+  hiredAt      DateTime? @map("hired_at")
+  metadata     Json?
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@index([tenantId, status])
+  @@index([department])
+  @@map("employees")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId  String    @map("tenant_id")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String    @map("user_id")
+  token     String    @unique
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid())
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId  String    @map("tenant_id")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String    @map("user_id")
+  token     String    @unique
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("email_verification_tokens")
+}
+
+// ============================================================
+// SUMMARY
+// ============================================================
+// Total models in this unified schema: 60+
+// Total enums: 20+
+// Coverage: core + business + ai + rag + channels (voice/whatsapp)
+//           + automation + analytics + notifications + compliance
+//
+// For full 140+ table coverage, see:
+//   docs/IMPLEMENTATION_02_DATABASE_SQL_GENERATOR.md
+//   docs/architecture/03_DATABASE_ARCHITECTURE.md (already in docs/)
+//   docs/database/03_TABLE_CATALOG.md (already in docs/)

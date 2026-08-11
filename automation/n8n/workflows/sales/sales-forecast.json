@@ -1,0 +1,312 @@
+{
+  "name": "Sales — AI Weekly Forecast",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "a1-sales-forecast-001",
+      "name": "Monday 06:00 Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "notes": "Weekly Monday 06:00 server time. Set TZ=Asia/Kolkata."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/analytics/sales?from={{ $today.minus({months:12}).toISODate() }}&to={{ $yesterday.toISODate() }}&granularity=monthly",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-forecast-002",
+      "name": "Fetch 12 Months Sales Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "GET /api/analytics/sales?from=12mo-ago&to=yesterday&granularity=monthly"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads?createdSince={{ $today.minus({months:12}).toISO() }}&status=NEW,ASSIGNED,CONTACTED,QUALIFIED&limit=5000",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-forecast-003",
+      "name": "Fetch 12 Months Lead Pipeline",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "Pull pipeline leads (NEW, ASSIGNED, CONTACTED, QUALIFIED) for forecast input"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/distributors?active=true&fields=id,tier,joinedAt",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-forecast-004",
+      "name": "Fetch Active Distributor Roster",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "Distributor count + tier distribution — input for forecast capacity model"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build AI forecast prompt with all signals\nconst sales = $('Fetch 12 Months Sales Data').item.json.body || $('Fetch 12 Months Sales Data').item.json;\nconst leads = $('Fetch 12 Months Lead Pipeline').item.json.body || $('Fetch 12 Months Lead Pipeline').item.json;\nconst distributors = $('Fetch Active Distributor Roster').item.json.body || $('Fetch Active Distributor Roster').item.json;\n\nconst salesData = sales.data || sales.monthly || [];\nconst leadData = leads.data || leads.leads || [];\nconst distData = distributors.data || distributors.distributors || [];\n\nconst totalSales12mo = salesData.reduce((s, m) => s + (m.totalSales || 0), 0);\nconst totalOrders12mo = salesData.reduce((s, m) => s + (m.totalOrders || 0), 0);\nconst tierCounts = distData.reduce((acc, d) => { acc[d.tier] = (acc[d.tier] || 0) + 1; return acc; }, {});\n\nconst prompt = `You are a sales forecasting analyst. Generate a 4-week forward forecast based on the following data.\n\nReturn JSON with this schema:\n{\n  \"forecast\": [\n    { \"week\": \"YYYY-MM-DD\", \"projectedRevenue\": int, \"projectedOrders\": int, \"confidence\": 0-100 }\n  ],\n  \"insights\": [\"string\", ...],\n  \"risks\": [\"string\", ...],\n  \"recommendations\": [\"string\", ...],\n  \"assumptions\": [\"string\", ...]\n}\n\nHistorical monthly sales (last 12 months):\n${JSON.stringify(salesData, null, 2)}\n\nActive lead pipeline (last 12 months, by status):\n${JSON.stringify(leadData.reduce((acc, l) => { acc[l.status] = (acc[l.status] || 0) + 1; return acc; }, {}))}\n\nDistributor roster:\n- Total active: ${distData.length}\n- Tier distribution: ${JSON.stringify(tierCounts)}\n\n12-month totals: revenue=${totalSales12mo}, orders=${totalOrders12mo}`;\n\nreturn [{\n  json: {\n    forecastDate: new Date().toISOString(),\n    horizonWeeks: 4,\n    inputData: {\n      monthlySales: salesData,\n      leadPipelineCounts: leadData.reduce((acc, l) => { acc[l.status] = (acc[l.status] || 0) + 1; return acc; }, {}),\n      distributorCount: distData.length,\n      tierCounts\n    },\n    prompt\n  }\n}];"
+      },
+      "id": "a1-sales-forecast-005",
+      "name": "Build Forecast Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300],
+      "notes": "Builds 4-week forecast prompt: monthly sales + lead pipeline + distributor roster. Asks AI for forecast[], insights[], risks[], recommendations[], assumptions[]."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/ai/conversations/sales-forecast/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"role\":\"system\",\"content\":\"{{ $json.prompt }}\",\"context\":{\"entityType\":\"forecast\",\"horizonWeeks\":4,\"forecastDate\":\"{{ $json.forecastDate }}\"},\"responseFormat\":\"json\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-forecast-006",
+      "name": "AI Generate Forecast",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/ai/conversations/sales-forecast/messages"
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $json.body || $json;\nlet forecast = { forecast: [], insights: [], risks: [], recommendations: [], assumptions: [] };\ntry {\n  let parsed = typeof resp === 'string' ? JSON.parse(resp) : resp;\n  if (parsed.data) parsed = parsed.data;\n  if (parsed.content) parsed = typeof parsed.content === 'string' ? JSON.parse(parsed.content) : parsed.content;\n  forecast = {\n    forecast: Array.isArray(parsed.forecast) ? parsed.forecast : [],\n    insights: Array.isArray(parsed.insights) ? parsed.insights : [],\n    risks: Array.isArray(parsed.risks) ? parsed.risks : [],\n    recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : [],\n    assumptions: Array.isArray(parsed.assumptions) ? parsed.assumptions : []\n  };\n} catch (e) { /* defaults */ }\n\nconst totalProjected = forecast.forecast.reduce((s, f) => s + (f.projectedRevenue || 0), 0);\nconst totalProjectedOrders = forecast.forecast.reduce((s, f) => s + (f.projectedOrders || 0), 0);\n\nreturn [{\n  json: {\n    forecastDate: $('Build Forecast Prompt').item.json.forecastDate,\n    horizonWeeks: 4,\n    inputData: $('Build Forecast Prompt').item.json.inputData,\n    forecast: forecast.forecast,\n    insights: forecast.insights,\n    risks: forecast.risks,\n    recommendations: forecast.recommendations,\n    assumptions: forecast.assumptions,\n    summary: {\n      totalProjectedRevenue: totalProjected,\n      totalProjectedOrders: totalProjectedOrders,\n      weekCount: forecast.forecast.length\n    }\n  }\n}];"
+      },
+      "id": "a1-sales-forecast-007",
+      "name": "Parse Forecast",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 300],
+      "notes": "Parses AI forecast response. Falls back to empty arrays if AI fails."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/analytics/sales-forecast",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-forecast-008",
+      "name": "Save Forecast to Analytics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/analytics/sales-forecast — persists forecast for trend analysis + dashboard"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"EMAIL\",\"recipient\":\"sales-team@dayjoy.ai\",\"template\":\"WEEKLY_SALES_FORECAST\",\"context\":{\"forecastDate\":\"{{ $json.forecastDate }}\",\"horizonWeeks\":{{ $json.horizonWeeks }},\"totalProjectedRevenue\":{{ $json.summary.totalProjectedRevenue }},\"totalProjectedOrders\":{{ $json.summary.totalProjectedOrders }},\"insights\":{{ JSON.stringify($json.insights) }},\"risks\":{{ JSON.stringify($json.risks) }},\"recommendations\":{{ JSON.stringify($json.recommendations) }}},\"priority\":\"MEDIUM\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-forecast-009",
+      "name": "Email Forecast to Sales Team",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/admin/dashboard-broadcast",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"event\":\"sales_forecast_updated\",\"channel\":\"admin-dashboard\",\"payload\":{\"forecastDate\":\"{{ $json.forecastDate }}\",\"summary\":{{ JSON.stringify($json.summary) }},\"forecast\":{{ JSON.stringify($json.forecast) }}}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-forecast-010",
+      "name": "Broadcast Forecast to Dashboard",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "Push forecast update to admin dashboard websocket subscribers"
+    }
+  ],
+  "connections": {
+    "Monday 06:00 Schedule": {
+      "main": [
+        [
+          { "node": "Fetch 12 Months Sales Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch 12 Months Sales Data": {
+      "main": [
+        [
+          { "node": "Fetch 12 Months Lead Pipeline", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch 12 Months Lead Pipeline": {
+      "main": [
+        [
+          { "node": "Fetch Active Distributor Roster", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Active Distributor Roster": {
+      "main": [
+        [
+          { "node": "Build Forecast Prompt", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Forecast Prompt": {
+      "main": [
+        [
+          { "node": "AI Generate Forecast", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "AI Generate Forecast": {
+      "main": [
+        [
+          { "node": "Parse Forecast", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Forecast": {
+      "main": [
+        [
+          { "node": "Save Forecast to Analytics", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Save Forecast to Analytics": {
+      "main": [
+        [
+          { "node": "Email Forecast to Sales Team", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Email Forecast to Sales Team": {
+      "main": [
+        [
+          { "node": "Broadcast Forecast to Dashboard", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "tags": [
+    { "name": "sales" },
+    { "name": "ai" },
+    { "name": "agent-a1" }
+  ],
+  "meta": {
+    "templateCreatedBy": "Agent A1 — CRM/Sales/Leads",
+    "description": "Weekly Monday 06:00 AI sales forecast. Gathers last 12 months of monthly sales, active lead pipeline counts, distributor roster + tier distribution. Calls AI to generate 4-week forward forecast with insights, risks, recommendations, assumptions. Saves to analytics, emails sales team, broadcasts to admin dashboard."
+  }
+}

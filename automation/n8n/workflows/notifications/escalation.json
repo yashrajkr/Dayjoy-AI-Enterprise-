@@ -1,0 +1,164 @@
+{
+  "name": "Notifications — Escalation (Failed After 3 Retries)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "notifications/escalation",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a2n3-0001-esc-webhook",
+      "name": "Webhook: notification.failed",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "a2n3-esc-webhook-id"
+    },
+    {
+      "parameters": {
+        "jsCode": "const n = $input.all()[0].json.body.data;\nif (n.event !== 'notification.failed' && $input.all()[0].json.body.event !== 'notification.failed') return [];\nconst payload = n.data || n;\n// Only escalate if 3 retries exhausted\nif ((payload.attempts || payload.retryCount || 0) < 3) return [{ json: { skip: true, reason: 'Below retry threshold' } }];\nreturn [{ json: { skip: false, payload, tenantId: payload.tenantId, notificationId: payload.notificationId, channels: ['EMAIL', 'SMS', 'WHATSAPP', 'PUSH'] } }];"
+      },
+      "id": "a2n3-0002-esc-filter",
+      "name": "Code: Confirm 3 Retries Exhausted",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/users/managers?tenantId={{ $json.tenantId }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2n3-0003-esc-managers",
+      "name": "Fetch: Tenant Managers",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "const m = $input.all()[0].json.data || $input.all()[0].json || [];\nconst n = $('Code: Confirm 3 Retries Exhausted').item.json.payload;\nreturn m.map(user => ({\n  json: {\n    managerId: user.id,\n    managerName: user.name,\n    managerEmail: user.email,\n    managerPhone: user.phone,\n    managerDeviceToken: user.deviceToken,\n    notificationId: n.notificationId || n.id,\n    originalChannel: n.channel,\n    originalRecipient: n.recipientEmail || n.recipientPhone,\n    failureReason: n.failureReason || n.lastError || 'Unknown',\n    attempts: n.attempts || n.retryCount || 3,\n    tenantId: $('Code: Confirm 3 Retries Exhausted').item.json.tenantId\n  }\n}));"
+      },
+      "id": "a2n3-0004-esc-expand",
+      "name": "Code: Per-Manager Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "fromEmail": "alerts@dayjoy.in",
+        "toEmail": "={{ $json.managerEmail }}",
+        "subject": "=🚨 URGENT: Notification Escalation (failed after 3 retries)",
+        "emailFormat": "html",
+        "html": "=<html><body style=\"font-family:Arial;color:#1f2937;\"><h2 style=\"color:#dc2626;\">🚨 Notification Escalation</h2><p>Hi {{ $json.managerName }},</p><p>A notification failed to deliver after <strong>{{ $json.attempts }} retries</strong> and needs your attention.</p><table style=\"border-collapse:collapse;\"><tr><td style=\"padding:6px;background:#fee2e2;\"><strong>Notification ID:</strong></td><td style=\"padding:6px;\">{{ $json.notificationId }}</td></tr><tr><td style=\"padding:6px;background:#fee2e2;\"><strong>Original Channel:</strong></td><td style=\"padding:6px;\">{{ $json.originalChannel }}</td></tr><tr><td style=\"padding:6px;background:#fee2e2;\"><strong>Original Recipient:</strong></td><td style=\"padding:6px;\">{{ $json.originalRecipient }}</td></tr><tr><td style=\"padding:6px;background:#fee2e2;\"><strong>Failure Reason:</strong></td><td style=\"padding:6px;\">{{ $json.failureReason }}</td></tr></table><p>Investigate in the <a href=\"https://app.dayjoy.in/admin/notifications/{{ $json.notificationId }}\">notification admin panel</a>.</p></body></html>",
+        "options": {}
+      },
+      "id": "a2n3-0005-esc-email",
+      "name": "Send: Manager Alert Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [880, -200],
+      "credentials": { "smtp": { "id": "smtp-cred-id", "name": "smtp" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "resource": "sms",
+        "operation": "send",
+        "from": "={{ $env.TWILIO_FROM_NUMBER }}",
+        "to": "={{ $json.managerPhone }}",
+        "message": "=🚨 Dayjoy ALERT: Notification {{ $json.notificationId }} failed after {{ $json.attempts }} retries on channel {{ $json.originalChannel }}. Reason: {{ $json.failureReason }}. Investigate immediately.",
+        "options": {}
+      },
+      "id": "a2n3-0006-esc-sms",
+      "name": "Send: Manager Alert SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [880, -50],
+      "credentials": { "twilioApi": { "id": "twilio-cred-id", "name": "twilioApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FCM_API_URL || 'https://fcm.googleapis.com/fcm/send' }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Authorization", "value": "key={{ $env.FCM_SERVER_KEY }}" }, { "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"to\": \"{{ $json.managerDeviceToken }}\",\n  \"notification\": { \"title\": \"🚨 Notification Escalation\", \"body\": \"Notification {{ $json.notificationId }} failed after {{ $json.attempts }} retries\", \"tag\": \"escalation\" },\n  \"data\": { \"notificationId\": \"{{ $json.notificationId }}\", \"workflow\": \"escalation\" },\n  \"priority\": \"high\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2n3-0007-esc-push",
+      "name": "Send: Manager Alert Push",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 100],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/audit/logs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"action\": \"NOTIFICATION_ESCALATED\",\n  \"entityType\": \"NOTIFICATION\",\n  \"entityId\": \"{{ $json.notificationId }}\",\n  \"severity\": \"HIGH\",\n  \"description\": \"Notification escalated to manager {{ $json.managerName }} ({{ $json.managerEmail }}) after {{ $json.attempts }} retries\",\n  \"tenantId\": \"{{ $json.tenantId }}\",\n  \"metadata\": {\n    \"workflow\": \"escalation\",\n    \"originalChannel\": \"{{ $json.originalChannel }}\",\n    \"failureReason\": \"{{ $json.failureReason }}\"\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2n3-0008-esc-audit",
+      "name": "Log: Audit Escalation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, -100],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/monitoring/alerts",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"alertType\": \"NOTIFICATION_DELIVERY_FAILURE\",\n  \"severity\": \"HIGH\",\n  \"source\": \"n8n/escalation\",\n  \"message\": \"Notification {{ $json.notificationId }} failed after {{ $json.attempts }} retries and was escalated\",\n  \"tenantId\": \"{{ $json.tenantId }}\",\n  \"metadata\": {\n    \"originalChannel\": \"{{ $json.originalChannel }}\",\n    \"failureReason\": \"{{ $json.failureReason }}\",\n    \"escalatedTo\": \"{{ $json.managerEmail }}\"\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2n3-0009-esc-monitor",
+      "name": "Create: Monitoring Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, -100],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Webhook: notification.failed": { "main": [ [ { "node": "Code: Confirm 3 Retries Exhausted", "type": "main", "index": 0 } ] ] },
+    "Code: Confirm 3 Retries Exhausted": { "main": [ [ { "node": "Fetch: Tenant Managers", "type": "main", "index": 0 } ] ] },
+    "Fetch: Tenant Managers": { "main": [ [ { "node": "Code: Per-Manager Items", "type": "main", "index": 0 } ] ] },
+    "Code: Per-Manager Items": { "main": [ [ { "node": "Send: Manager Alert Email", "type": "main", "index": 0 }, { "node": "Send: Manager Alert SMS", "type": "main", "index": 0 }, { "node": "Send: Manager Alert Push", "type": "main", "index": 0 } ] ] },
+    "Send: Manager Alert Email": { "main": [ [ { "node": "Log: Audit Escalation", "type": "main", "index": 0 } ] ] },
+    "Send: Manager Alert SMS": { "main": [ [ { "node": "Log: Audit Escalation", "type": "main", "index": 0 } ] ] },
+    "Send: Manager Alert Push": { "main": [ [ { "node": "Log: Audit Escalation", "type": "main", "index": 0 } ] ] },
+    "Log: Audit Escalation": { "main": [ [ { "node": "Create: Monitoring Alert", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "notifications" }, { "name": "escalation" }, { "name": "alerts" }, { "name": "dayjoy" }]
+}

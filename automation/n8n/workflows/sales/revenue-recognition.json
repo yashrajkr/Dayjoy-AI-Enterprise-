@@ -1,0 +1,281 @@
+{
+  "name": "Sales — Daily Revenue Recognition",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 0 * * *"
+            }
+          ]
+        }
+      },
+      "id": "a1-sales-rev-001",
+      "name": "Daily Midnight Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "notes": "Daily at 00:00 server time. Set TZ=Asia/Kolkata."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/orders?status=DELIVERED&deliveredOn={{ $yesterday.toISODate() }}&limit=1000",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-rev-002",
+      "name": "Fetch Delivered Orders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "GET /api/orders?status=DELIVERED&deliveredOn=yesterday — orders delivered yesterday"
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $json.body || $json;\nconst orders = resp.data || resp.orders || [];\n\nconst totalRevenue = orders.reduce((sum, o) => sum + (o.total || o.amount || 0), 0);\nconst totalOrders = orders.length;\nconst distributorRevenue = {};\nfor (const o of orders) {\n  const d = o.distributorId || o.assignedDistributorId;\n  if (!d) continue;\n  distributorRevenue[d] = (distributorRevenue[d] || 0) + (o.total || o.amount || 0);\n}\n\nreturn [{\n  json: {\n    reportDate: $yesterday.toISODate(),\n    generatedAt: new Date().toISOString(),\n    orders,\n    summary: {\n      totalRevenue,\n      totalOrders,\n      averageOrderValue: totalOrders ? Math.round(totalRevenue / totalOrders) : 0,\n      distributorRevenueMap: distributorRevenue,\n      distributorCount: Object.keys(distributorRevenue).length\n    }\n  }\n}];"
+      },
+      "id": "a1-sales-rev-003",
+      "name": "Compute Daily Revenue Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "notes": "Aggregates: totalRevenue, totalOrders, AOV, per-distributor revenue map"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/accounting/revenue-recognition",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "sendBodyRaw": true,
+        "jsonBody": "={\"orders\":{{ JSON.stringify($json.orders) }},\"recognizedAt\":\"{{ $json.generatedAt }}\",\"reportDate\":\"{{ $json.reportDate }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-rev-004",
+      "name": "Recognize Revenue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/accounting/revenue-recognition — moves delivered orders from deferred to recognized revenue"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/commissions/calculate-batch",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"orders\":{{ JSON.stringify($('Compute Daily Revenue Summary').item.json.orders) }},\"calculatedAt\":\"{{ $('Compute Daily Revenue Summary').item.json.generatedAt }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-rev-005",
+      "name": "Calculate Distributor Commissions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/commissions/calculate-batch — calculates per-order commissions using distributor tier rates"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge commission results into the summary\nconst summary = $('Compute Daily Revenue Summary').item.json.summary;\nconst commissionResp = $json.body || $json;\nconst commissions = commissionResp.data || commissionResp.commissions || [];\n\nconst totalCommission = commissions.reduce((sum, c) => sum + (c.amount || 0), 0);\nconst distributorCommissionMap = {};\nfor (const c of commissions) {\n  distributorCommissionMap[c.distributorId] = (distributorCommissionMap[c.distributorId] || 0) + (c.amount || 0);\n}\n\nreturn [{\n  json: {\n    reportDate: $('Compute Daily Revenue Summary').item.json.reportDate,\n    generatedAt: $('Compute Daily Revenue Summary').item.json.generatedAt,\n    summary: {\n      ...summary,\n      totalCommission,\n      distributorCommissionMap,\n      netRevenue: summary.totalRevenue - totalCommission\n    },\n    commissionCount: commissions.length\n  }\n}];"
+      },
+      "id": "a1-sales-rev-006",
+      "name": "Merge Commission Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/analytics/revenue-daily-report",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-rev-007",
+      "name": "Save Daily Revenue Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/analytics/revenue-daily-report — persisted for finance team dashboards"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"EMAIL\",\"recipient\":\"finance@dayjoy.ai\",\"template\":\"DAILY_REVENUE_REPORT\",\"context\":{\"reportDate\":\"{{ $json.reportDate }}\",\"totalRevenue\":{{ $json.summary.totalRevenue }},\"totalOrders\":{{ $json.summary.totalOrders }},\"totalCommission\":{{ $json.summary.totalCommission }},\"netRevenue\":{{ $json.summary.netRevenue }},\"distributorCount\":{{ $json.summary.distributorCount }}},\"priority\":\"MEDIUM\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-rev-008",
+      "name": "Email Daily Revenue Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "Email finance team with daily revenue + commission summary"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/audit-log",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"event\":\"revenue.recognized_daily\",\"severity\":\"INFO\",\"meta\":{\"reportDate\":\"{{ $json.reportDate }}\",\"totalRevenue\":{{ $json.summary.totalRevenue }},\"totalCommission\":{{ $json.summary.totalCommission }}}}",
+        "options": {
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-rev-009",
+      "name": "Audit Log Recognition",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    }
+  ],
+  "connections": {
+    "Daily Midnight Schedule": {
+      "main": [
+        [
+          { "node": "Fetch Delivered Orders", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Delivered Orders": {
+      "main": [
+        [
+          { "node": "Compute Daily Revenue Summary", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Compute Daily Revenue Summary": {
+      "main": [
+        [
+          { "node": "Recognize Revenue", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Recognize Revenue": {
+      "main": [
+        [
+          { "node": "Calculate Distributor Commissions", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Calculate Distributor Commissions": {
+      "main": [
+        [
+          { "node": "Merge Commission Results", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Merge Commission Results": {
+      "main": [
+        [
+          { "node": "Save Daily Revenue Report", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Save Daily Revenue Report": {
+      "main": [
+        [
+          { "node": "Email Daily Revenue Report", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Email Daily Revenue Report": {
+      "main": [
+        [
+          { "node": "Audit Log Recognition", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "tags": [
+    { "name": "sales" },
+    { "name": "finance" },
+    { "name": "agent-a1" }
+  ],
+  "meta": {
+    "templateCreatedBy": "Agent A1 — CRM/Sales/Leads",
+    "description": "Daily 00:00 revenue recognition job. Fetches orders delivered yesterday, recognizes revenue (moves from deferred to recognized), calculates per-distributor commissions at tier rates, saves daily revenue report, emails finance team, audit-logs the recognition. Computes totalRevenue, totalOrders, AOV, totalCommission, netRevenue."
+  }
+}

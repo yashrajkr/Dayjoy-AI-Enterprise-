@@ -1,0 +1,116 @@
+{
+  "name": "Email — Welcome (Customer / Distributor)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "email/welcome",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a2e1-0001-welcome-webhook",
+      "name": "Webhook: customer.created / distributor.created",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "a2e1-welcome-webhook-id"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "or",
+          "conditions": [
+            { "id": "cond-event-customer", "leftValue": "={{ $json.body.event }}", "rightValue": "customer.created", "operator": { "type": "string", "operation": "equals" } },
+            { "id": "cond-event-distributor", "leftValue": "={{ $json.body.event }}", "rightValue": "distributor.created", "operator": { "type": "string", "operation": "equals" } }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2e1-0002-welcome-filter",
+      "name": "Filter: Welcome Events",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "asgn-name", "name": "recipientName", "value": "={{ $('Webhook: customer.created / distributor.created').item.json.body.data.firstName || $('Webhook: customer.created / distributor.created').item.json.body.data.name }}", "type": "string" },
+            { "id": "asgn-email", "name": "recipientEmail", "value": "={{ $('Webhook: customer.created / distributor.created').item.json.body.data.email }}", "type": "string" },
+            { "id": "asgn-type", "name": "customerType", "value": "={{ $('Webhook: customer.created / distributor.created').item.json.body.event === 'customer.created' ? 'Customer' : 'Distributor' }}", "type": "string" },
+            { "id": "asgn-tenantid", "name": "tenantId", "value": "={{ $('Webhook: customer.created / distributor.created').item.json.body.data.tenantId }}", "type": "string" },
+            { "id": "asgn-id", "name": "entityId", "value": "={{ $('Webhook: customer.created / distributor.created').item.json.body.data.id }}", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2e1-0003-welcome-setvars",
+      "name": "Set: Recipient Variables",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const t = $input.all()[0].json;\nconst isDistributor = t.customerType === 'Distributor';\nconst guideUrl = isDistributor\n  ? 'https://app.dayjoy.in/distributor/getting-started'\n  : 'https://app.dayjoy.in/customer/getting-started';\nconst assistantIntro = isDistributor\n  ? 'Meet Joy, your AI sales assistant. Joy helps you score leads, draft pitches, and track commissions — available 24/7 from your dashboard.'\n  : 'Meet Joy, your personal AI assistant. Ask Joy about products, place orders, track deliveries, or get instant support — 24/7 from the chat bubble.';\nconst html = `\n<!doctype html><html><body style=\"font-family:Arial,Helvetica,sans-serif;color:#1f2937;background:#fff7ed;margin:0;padding:0;\">\n  <div style=\"max-width:560px;margin:0 auto;padding:32px;\">\n    <h1 style=\"color:#ea580c;\">Welcome to Dayjoy, ${t.recipientName}! 🎉</h1>\n    <p>Thanks for joining the Dayjoy family as a <strong>${t.customerType}</strong>. We're excited to have you on board.</p>\n    <h2 style=\"color:#9a3412;\">Getting Started</h2>\n    <p>To get the most out of Dayjoy, follow our quick-start guide:</p>\n    <p><a href=\"${guideUrl}\" style=\"background:#ea580c;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;display:inline-block;\">Open Getting Started Guide →</a></p>\n    <h2 style=\"color:#9a3412;\">Meet Joy — Your AI Assistant</h2>\n    <p>${assistantIntro}</p>\n    <hr style=\"margin:24px 0;border:none;border-top:1px solid #fed7aa;\" />\n    <p style=\"font-size:12px;color:#6b7280;\">Dayjoy Wellness Pvt. Ltd. ·support@dayjoy.in · +91-90000-00000</p>\n  </div>\n</body></html>`;\nreturn [{ json: { ...t, html, subject: `Welcome to Dayjoy, ${t.recipientName}!`, guideUrl, assistantIntro } }];"
+      },
+      "id": "a2e1-0004-welcome-compose",
+      "name": "Code: Compose Welcome HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@dayjoy.in",
+        "toEmail": "={{ $json.recipientEmail }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "a2e1-0005-welcome-send",
+      "name": "Send Welcome Email (SMTP)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [880, 0],
+      "credentials": { "smtp": { "id": "smtp-cred-id", "name": "smtp" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "X-Source", "value": "n8n/welcome-email" }, { "name": "X-Tenant-Id", "value": "={{ $('Set: Recipient Variables').item.json.tenantId }}" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"EMAIL\",\n  \"event\": \"welcome_email_sent\",\n  \"recipientId\": \"{{ $('Set: Recipient Variables').item.json.entityId }}\",\n  \"recipientType\": \"{{ $('Set: Recipient Variables').item.json.customerType.toUpperCase() }}\",\n  \"recipientEmail\": \"{{ $('Set: Recipient Variables').item.json.recipientEmail }}\",\n  \"status\": \"SENT\",\n  \"tenantId\": \"{{ $('Set: Recipient Variables').item.json.tenantId }}\",\n  \"metadata\": { \"workflow\": \"welcome-email\" }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2e1-0006-welcome-audit",
+      "name": "Log: Audit Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Webhook: customer.created / distributor.created": { "main": [ [ { "node": "Filter: Welcome Events", "type": "main", "index": 0 } ] ] },
+    "Filter: Welcome Events": { "main": [ [ { "node": "Set: Recipient Variables", "type": "main", "index": 0 } ] ] },
+    "Set: Recipient Variables": { "main": [ [ { "node": "Code: Compose Welcome HTML", "type": "main", "index": 0 } ] ] },
+    "Code: Compose Welcome HTML": { "main": [ [ { "node": "Send Welcome Email (SMTP)", "type": "main", "index": 0 } ] ] },
+    "Send Welcome Email (SMTP)": { "main": [ [ { "node": "Log: Audit Notification", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "email" }, { "name": "onboarding" }, { "name": "dayjoy" }]
+}

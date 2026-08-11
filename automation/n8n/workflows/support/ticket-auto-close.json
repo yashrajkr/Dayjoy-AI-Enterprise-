@@ -1,0 +1,175 @@
+{
+  "name": "Support — Auto-Close Resolved Tickets (Daily)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "cronExpression", "expression": "0 0 * * *" } ] }
+      },
+      "id": "a2s4-0001-tac-schedule",
+      "name": "Schedule: Daily Midnight",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/tickets?status=RESOLVED&resolvedBeforeDays=7",
+        "options": { "timeout": 20000 }
+      },
+      "id": "a2s4-0002-tac-fetch",
+      "name": "Fetch: Resolved > 7 Days",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "id": "a2s4-0003-tac-split",
+      "name": "Split: Per Ticket",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const t = $input.all()[0].json;\nconst lastCustomerReply = t.lastCustomerReplyAt ? new Date(t.lastCustomerReplyAt) : null;\nconst resolvedAt = new Date(t.resolvedAt || t.updatedAt);\nconst now = new Date();\nconst daysSinceResolved = (now - resolvedAt) / 86400000;\nconst daysSinceCustomerReply = lastCustomerReply ? (now - lastCustomerReply) / 86400000 : 999;\n// Auto-close if: resolved for 7+ days AND no customer response in that window\nconst shouldClose = daysSinceResolved >= 7 && daysSinceCustomerReply >= 7;\nreturn [{\n  json: {\n    shouldClose,\n    daysSinceResolved: daysSinceResolved.toFixed(1),\n    daysSinceCustomerReply: daysSinceCustomerReply === 999 ? null : daysSinceCustomerReply.toFixed(1),\n    ticketId: t.id,\n    ticketNumber: t.ticketNumber || t.id,\n    subject: t.subject,\n    customerId: t.customerId,\n    customerEmail: t.customerEmail,\n    tenantId: t.tenantId,\n    assigneeId: t.assigneeId,\n    resolvedAt: t.resolvedAt || t.updatedAt\n  }\n}];"
+      },
+      "id": "a2s4-0004-tac-evaluate",
+      "name": "Code: Evaluate Auto-Close",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "dataType": "boolean",
+        "value1": "={{ $json.shouldClose }}",
+        "rules": { "rules": [ { "value2": true, "outputKey": 0, "label": "Auto-Close" } ] },
+        "fallbackOutput": 1,
+        "options": {}
+      },
+      "id": "a2s4-0005-tac-switch",
+      "name": "Switch: Close or Skip",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/tickets/{{ $json.ticketId }}/status",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"CLOSED\",\n  \"reason\": \"AUTO_CLOSED_NO_CUSTOMER_RESPONSE\",\n  \"daysSinceResolved\": {{ $json.daysSinceResolved }},\n  \"closedAt\": \"{{ $now.toISO() }}\",\n  \"closedBy\": \"n8n/ticket-auto-close\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2s4-0006-tac-close",
+      "name": "Update: Close Ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"EMAIL\",\n  \"event\": \"ticket_auto_closed\",\n  \"ticketId\": \"{{ $('Code: Evaluate Auto-Close').item.json.ticketId }}\",\n  \"tenantId\": \"{{ $('Code: Evaluate Auto-Close').item.json.tenantId }}\",\n  \"recipientEmail\": \"{{ $('Code: Evaluate Auto-Close').item.json.customerEmail }}\",\n  \"template\": \"ticket-closure\",\n  \"metadata\": {\n    \"ticketNumber\": \"{{ $('Code: Evaluate Auto-Close').item.json.ticketNumber }}\",\n    \"subject\": \"{{ $('Code: Evaluate Auto-Close').item.json.subject }}\",\n    \"closedAt\": \"{{ $now.toISO() }}\",\n    \"ticketUrl\": \"https://app.dayjoy.in/support/tickets/{{ $('Code: Evaluate Auto-Close').item.json.ticketId }}\",\n    \"reopenUrl\": \"https://app.dayjoy.in/support/tickets/{{ $('Code: Evaluate Auto-Close').item.json.ticketId }}/reopen\",\n    \"workflow\": \"ticket-auto-close\"\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2s4-0007-tac-notify",
+      "name": "Send: Closure Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"EMAIL\",\n  \"event\": \"csat_request_after_resolution\",\n  \"ticketId\": \"{{ $('Code: Evaluate Auto-Close').item.json.ticketId }}\",\n  \"tenantId\": \"{{ $('Code: Evaluate Auto-Close').item.json.tenantId }}\",\n  \"recipientEmail\": \"{{ $('Code: Evaluate Auto-Close').item.json.customerEmail }}\",\n  \"template\": \"ticket-csat-request\",\n  \"metadata\": {\n    \"ticketNumber\": \"{{ $('Code: Evaluate Auto-Close').item.json.ticketNumber }}\",\n    \"csatFormUrl\": \"https://app.dayjoy.in/support/tickets/{{ $('Code: Evaluate Auto-Close').item.json.ticketId }}/feedback\",\n    \"workflow\": \"ticket-auto-close\"\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2s4-0008-tac-csat",
+      "name": "Send: CSAT Feedback Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/analytics/track",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"event\": \"ticket_auto_closed\",\n  \"entityType\": \"TICKET\",\n  \"entityId\": \"{{ $('Code: Evaluate Auto-Close').item.json.ticketId }}\",\n  \"tenantId\": \"{{ $('Code: Evaluate Auto-Close').item.json.tenantId }}\",\n  \"properties\": {\n    \"ticketNumber\": \"{{ $('Code: Evaluate Auto-Close').item.json.ticketNumber }}\",\n    \"daysSinceResolved\": {{ $('Code: Evaluate Auto-Close').item.json.daysSinceResolved }},\n    \"workflow\": \"ticket-auto-close\"\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2s4-0009-tac-analytics",
+      "name": "Update: Analytics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"SYSTEM\",\n  \"event\": \"ticket_auto_close_completed\",\n  \"ticketId\": \"{{ $('Code: Evaluate Auto-Close').item.json.ticketId }}\",\n  \"status\": \"SUCCESS\",\n  \"tenantId\": \"{{ $('Code: Evaluate Auto-Close').item.json.tenantId }}\",\n  \"metadata\": {\n    \"workflow\": \"ticket-auto-close\",\n    \"daysSinceResolved\": {{ $('Code: Evaluate Auto-Close').item.json.daysSinceResolved }}\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2s4-0010-tac-audit",
+      "name": "Log: Audit Auto-Close",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Schedule: Daily Midnight": { "main": [ [ { "node": "Fetch: Resolved > 7 Days", "type": "main", "index": 0 } ] ] },
+    "Fetch: Resolved > 7 Days": { "main": [ [ { "node": "Split: Per Ticket", "type": "main", "index": 0 } ] ] },
+    "Split: Per Ticket": { "main": [ [ { "node": "Code: Evaluate Auto-Close", "type": "main", "index": 0 } ] ] },
+    "Code: Evaluate Auto-Close": { "main": [ [ { "node": "Switch: Close or Skip", "type": "main", "index": 0 } ] ] },
+    "Switch: Close or Skip": { "main": [ [ { "node": "Update: Close Ticket", "type": "main", "index": 0 } ] ] },
+    "Update: Close Ticket": { "main": [ [ { "node": "Send: Closure Notification", "type": "main", "index": 0 } ] ] },
+    "Send: Closure Notification": { "main": [ [ { "node": "Send: CSAT Feedback Request", "type": "main", "index": 0 } ] ] },
+    "Send: CSAT Feedback Request": { "main": [ [ { "node": "Update: Analytics", "type": "main", "index": 0 } ] ] },
+    "Update: Analytics": { "main": [ [ { "node": "Log: Audit Auto-Close", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "support" }, { "name": "tickets" }, { "name": "auto-close" }, { "name": "dayjoy" }]
+}

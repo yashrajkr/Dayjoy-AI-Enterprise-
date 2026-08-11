@@ -1,0 +1,13 @@
+# Grafana Dashboard Provisioning
+apiVersion: 1
+providers:
+  - name: "Dayjoy AI Dashboards"
+    orgId: 1
+    folder: "Dayjoy AI"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      # Provision every JSON dashboard dropped under this path. The
+      # docker-compose volume mounts `monitoring/grafana/dashboards/` here.
+      path: /var/lib/grafana/dashboards/*.json

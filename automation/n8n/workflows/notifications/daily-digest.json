@@ -1,0 +1,135 @@
+{
+  "name": "Notifications — Daily Digest Email",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "cronExpression", "expression": "0 8 * * *" } ] }
+      },
+      "id": "a2n2-0001-digest-schedule",
+      "name": "Schedule: Daily 8 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/digest-queue",
+        "options": { "timeout": 20000 }
+      },
+      "id": "a2n2-0002-digest-fetch",
+      "name": "Fetch: Unread Notifications Per User",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "id": "a2n2-0003-digest-split",
+      "name": "Split: Per User",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const u = $input.all()[0].json;\nif (!u.unread || u.unread.length === 0) return [{ json: { skip: true, reason: 'No unread notifications' } }];\n// Group by category\nconst groups = {};\nfor (const n of u.unread) {\n  const cat = n.category || n.type || 'General';\n  if (!groups[cat]) groups[cat] = [];\n  groups[cat].push(n);\n}\nconst sectionsHtml = Object.entries(groups).map(([cat, items]) => {\n  const itemsHtml = items.slice(0, 5).map(i => `<li style=\"padding:4px 0;\">${i.title}${i.body ? ': ' + i.body.slice(0, 120) : ''}</li>`).join('');\n  const more = items.length > 5 ? `<li style=\"color:#6b7280;font-size:12px;\">+${items.length - 5} more in ${cat}</li>` : '';\n  return `<h3 style=\"color:#9a3412;margin-top:16px;\">${cat} (${items.length})</h3><ul>${itemsHtml}${more}</ul>`;\n}).join('');\nconst totalCount = u.unread.length;\nconst html = `\n<!doctype html><html><body style=\"font-family:Arial,Helvetica,sans-serif;color:#1f2937;background:#fff7ed;margin:0;padding:0;\">\n  <div style=\"max-width:600px;margin:0 auto;padding:32px;\">\n    <h1 style=\"color:#ea580c;\">Your Dayjoy Daily Digest 📬</h1>\n    <p>Hi ${u.userName || 'there'},</p>\n    <p>You have <strong>${totalCount} unread notification${totalCount !== 1 ? 's' : ''}</strong> from the last 24 hours.</p>\n    ${sectionsHtml}\n    <p style=\"margin-top:24px;\"><a href=\"https://app.dayjoy.in/notifications\" style=\"background:#ea580c;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;display:inline-block;\">View All Notifications →</a></p>\n    <hr style=\"margin:24px 0;border:none;border-top:1px solid #fed7aa;\" />\n    <p style=\"font-size:12px;color:#6b7280;\">Dayjoy Wellness Pvt. Ltd. · notifications@dayjoy.in</p>\n  </div>\n</body></html>`;\nreturn [{ json: { skip: false, html, subject: `Dayjoy Daily Digest — ${totalCount} notification${totalCount !== 1 ? 's' : ''}`, recipientEmail: u.email, userId: u.userId, tenantId: u.tenantId, notificationIds: u.unread.map(n => n.id) } }];"
+      },
+      "id": "a2n2-0004-digest-compose",
+      "name": "Code: Compose Digest HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.skip }}",
+        "rules": { "rules": [ { "value2": "false", "outputKey": "send", "label": "Send" } ] },
+        "fallbackOutput": 1,
+        "options": {}
+      },
+      "id": "a2n2-0005-digest-switch",
+      "name": "Switch: Send or Skip",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "fromEmail": "digest@dayjoy.in",
+        "toEmail": "={{ $json.recipientEmail }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "a2n2-0006-digest-send",
+      "name": "Send: Digest Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1100, 0],
+      "credentials": { "smtp": { "id": "smtp-cred-id", "name": "smtp" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/mark-digested",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"userId\": \"{{ $('Code: Compose Digest HTML').item.json.userId }}\",\n  \"tenantId\": \"{{ $('Code: Compose Digest HTML').item.json.tenantId }}\",\n  \"notificationIds\": {{ JSON.stringify($('Code: Compose Digest HTML').item.json.notificationIds) }},\n  \"digestSentAt\": \"{{ $now.toISO() }}\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2n2-0007-digest-mark",
+      "name": "Mark: Notifications as Digested",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"EMAIL\",\n  \"event\": \"daily_digest_sent\",\n  \"userId\": \"{{ $('Code: Compose Digest HTML').item.json.userId }}\",\n  \"recipientEmail\": \"{{ $('Code: Compose Digest HTML').item.json.recipientEmail }}\",\n  \"status\": \"SENT\",\n  \"tenantId\": \"{{ $('Code: Compose Digest HTML').item.json.tenantId }}\",\n  \"metadata\": { \"workflow\": \"daily-digest\", \"notificationCount\": {{ $('Code: Compose Digest HTML').item.json.notificationIds.length }} }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2n2-0008-digest-audit",
+      "name": "Log: Audit Digest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Schedule: Daily 8 AM": { "main": [ [ { "node": "Fetch: Unread Notifications Per User", "type": "main", "index": 0 } ] ] },
+    "Fetch: Unread Notifications Per User": { "main": [ [ { "node": "Split: Per User", "type": "main", "index": 0 } ] ] },
+    "Split: Per User": { "main": [ [ { "node": "Code: Compose Digest HTML", "type": "main", "index": 0 } ] ] },
+    "Code: Compose Digest HTML": { "main": [ [ { "node": "Switch: Send or Skip", "type": "main", "index": 0 } ] ] },
+    "Switch: Send or Skip": { "main": [ [ { "node": "Send: Digest Email", "type": "main", "index": 0 } ] ] },
+    "Send: Digest Email": { "main": [ [ { "node": "Mark: Notifications as Digested", "type": "main", "index": 0 } ] ] },
+    "Mark: Notifications as Digested": { "main": [ [ { "node": "Log: Audit Digest", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "notifications" }, { "name": "digest" }, { "name": "dayjoy" }]
+}

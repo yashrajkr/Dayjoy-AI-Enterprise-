@@ -1,0 +1,262 @@
+======================================================================
+DAYJOY AI ENTERPRISE — REPOSITORY INVENTORY REPORT
+======================================================================
+
+Repository root: /home/z/my-project/build/dayjoy-ai-enterprise
+Total files:     1238
+
+=== TOP-LEVEL STRUCTURE ===
+
+  📄 .editorconfig                      248 bytes
+  📄 .env.example                      2784 bytes
+  📁 .github                           10 files
+  📄 .gitignore                        1384 bytes
+  📄 .pre-commit-config.yaml            850 bytes
+  📄 .prettierrc                        174 bytes
+  📁 .vscode                            2 files
+  📄 CHANGELOG.md                      1863 bytes
+  📄 CONTRIBUTING.md                   1855 bytes
+  📄 INVENTORY_REPORT.txt              8030 bytes
+  📄 LICENSE                            351 bytes
+  📄 Makefile                          1743 bytes
+  📄 PRODUCTION_READINESS_ROADMAP.md   27336 bytes
+  📄 README.md                        12426 bytes
+  📁 _reference                       315 files
+  📁 agent-ctx                         10 files
+  📁 apps                              92 files
+  📁 backend                          248 files
+  📁 database                          43 files
+  📁 deployment                        33 files
+  📄 docker-compose.yml                4584 bytes
+  📁 docs                             227 files
+  📁 monitoring                        12 files
+  📄 package.json                      2142 bytes
+  📁 packages                          41 files
+  📄 pnpm-workspace.yaml                106 bytes
+  📁 rag                              103 files
+  📁 shared                            11 files
+  📁 testing                            4 files
+  📁 vapi                              70 files
+  📁 whatsapp-ai                        1 files
+  📄 worklog.md                      132008 bytes
+
+=== FOLDER DETAILS ===
+
+--- apps/ (Frontend applications) — 92 files ---
+  📁 admin-dashboard/  (92 files)
+  📁 customer-portal/  (0 files)
+  📁 distributor-portal/  (0 files)
+  📁 employee-portal/  (0 files)
+  📁 voice-ai/  (0 files)
+  📁 website-chat/  (0 files)
+
+--- backend/ (NestJS backend modules) — 248 files ---
+  📄 .env.example  (4,216 bytes)
+  📄 README.md  (31,816 bytes)
+  📁 _express-reference/  (30 files)
+  📁 _shared/  (60 files)
+  📁 admin/  (11 files)
+  📁 ai/  (19 files)
+  📁 analytics/  (12 files)
+  📄 app.module.ts  (5,915 bytes)
+  📁 auth/  (20 files)
+  📁 automation/  (1 files)
+  📄 bun.lock  (169,275 bytes)
+  📁 customers/  (8 files)
+  📁 dist/  (0 files)
+  📁 distributors/  (8 files)
+  📁 employees/  (5 files)
+  📁 knowledge/  (7 files)
+  📄 main.ts  (8,638 bytes)
+  📄 nest-cli.json  (289 bytes)
+  📁 notifications/  (19 files)
+  📁 orders/  (11 files)
+  📄 package.json  (2,877 bytes)
+  📄 pnpm-lock.yaml  (205,925 bytes)
+  📁 products/  (15 files)
+  📁 rag/  (0 files)
+  📁 test/  (1 files)
+  📄 tsconfig.check.json  (798 bytes)
+  📄 tsconfig.json  (761 bytes)
+  📁 users/  (9 files)
+  📄 vitest.config.ts  (2,966 bytes)
+  📄 vitest.e2e.config.ts  (688 bytes)
+
+--- database/ (Prisma schema + SQL migrations) — 43 files ---
+  📄 .env.example  (2,762 bytes)
+  📄 README.md  (9,988 bytes)
+  📁 backups/  (0 files)
+  📁 docs/  (1 files)
+  📁 documentation/  (6 files)
+  📁 functions/  (1 files)
+  📁 migrations/  (18 files)
+  📁 prisma/  (6 files)
+  📁 scripts/  (6 files)
+  📁 seed/  (1 files)
+  📁 triggers/  (1 files)
+  📁 views/  (1 files)
+
+--- rag/ (RAG pipeline (TS)) — 103 files ---
+  📁 context-builder/  (4 files)
+  📁 docs/  (13 files)
+  📁 embeddings/  (6 files)
+  📁 evaluation/  (9 files)
+  📁 ingestion/  (10 files)
+  📁 loaders/  (10 files)
+  📁 memory/  (3 files)
+  📁 prompts/  (13 files)
+  📄 rag.module.ts  (7,180 bytes)
+  📁 response-pipeline/  (7 files)
+  📁 retriever/  (5 files)
+  📁 search/  (5 files)
+  📁 security/  (4 files)
+  📁 tests/  (8 files)
+  📁 vector-store/  (5 files)
+
+--- vapi/ (Voice AI (Vapi) — 63 files across 10 modules) — 70 files ---
+  📁 analytics/  (5 files)
+  📁 assistants/  (5 files)
+  📁 config/  (5 files)
+  📁 deployment/  (4 files)
+  📁 docs/  (20 files)
+  📁 flows/  (5 files)
+  📁 memory/  (4 files)
+  📁 tests/  (7 files)
+  📁 tools/  (9 files)
+  📁 webhooks/  (6 files)
+
+--- whatsapp-ai/ (WhatsApp Business API integration) — 1 files ---
+  📄 README.md  (1,260 bytes)
+
+--- shared/ (Shared types, utils, constants) — 11 files ---
+  📁 constants/  (1 files)
+  📁 dto/  (0 files)
+  📁 types/  (6 files)
+  📁 utils/  (4 files)
+
+--- packages/ (Workspace packages) — 41 files ---
+  📁 config/  (2 files)
+  📁 database/  (3 files)
+  📁 knowledge-base/  (8 files)
+  📁 sdk/  (2 files)
+  📁 shared/  (12 files)
+  📁 types/  (7 files)
+  📁 ui/  (2 files)
+  📁 utils/  (5 files)
+
+--- docs/ (Architecture / research / implementation docs) — 227 files ---
+  📄 CHANGELOG.md  (3,405 bytes)
+  📄 CODEOWNERS.md  (4,195 bytes)
+  📄 CODE_OF_CONDUCT.md  (5,024 bytes)
+  📄 CONTRIBUTING.md  (8,170 bytes)
+  📄 DOCUMENTATION_INDEX.md  (2,339 bytes)
+  📄 FASTAPI_CHANGELOG.md  (4,074 bytes)
+  📄 FINAL_AUDIT_REPORT.md  (3,640 bytes)
+  📄 LICENSE.md  (2,069 bytes)
+  📄 ONBOARDING.md  (4,051 bytes)
+  📄 README.md  (8,935 bytes)
+  📄 REPOSITORY_AUDIT_REPORT.md  (12,637 bytes)
+  📄 START_HERE.md  (8,146 bytes)
+  📁 ai/  (18 files)
+  📁 api/  (18 files)
+  📁 architecture/  (33 files)
+  📁 database/  (18 files)
+  📁 deployment/  (1 files)
+  📁 frontend/  (18 files)
+  📁 implementation/  (26 files)
+  📁 infrastructure/  (19 files)
+  📁 operations/  (24 files)
+  📁 research/  (36 files)
+  📁 security/  (4 files)
+  📁 voice-ai/  (0 files)
+
+--- deployment/ (Docker, K8s, Terraform, scripts) — 33 files ---
+  📁 docker/  (6 files)
+  📁 kubernetes/  (11 files)
+  📁 nginx/  (1 files)
+  📁 scripts/  (4 files)
+  📁 terraform/  (11 files)
+
+--- monitoring/ (Prometheus, Grafana, Loki) — 12 files ---
+  📁 grafana/  (7 files)
+  📁 loki/  (2 files)
+  📁 prometheus/  (3 files)
+
+--- testing/ (Unit, integration, E2E, load) — 4 files ---
+  📄 README.md  (663 bytes)
+  📁 e2e/  (3 files)
+  📁 integration/  (0 files)
+  📁 load/  (0 files)
+  📁 unit/  (0 files)
+
+--- .github/ (CI/CD workflows, issue templates) — 10 files ---
+  📄 CODEOWNERS  (316 bytes)
+  📁 ISSUE_TEMPLATE/  (5 files)
+  📄 PULL_REQUEST_TEMPLATE.md  (928 bytes)
+  📄 dependabot.yml  (1,436 bytes)
+  📁 workflows/  (2 files)
+
+=== VAPI 63-FILE SPEC VERIFICATION ===
+
+  ✅ Module 1 — Foundation: 6/6
+  ✅ Module 2 — Prompts: 6/6
+  ✅ Module 3 — Tools: 10/10
+  ✅ Module 4 — Webhooks: 6/6
+  ✅ Module 5 — Flows: 6/6
+  ✅ Module 6 — Memory: 5/5
+  ✅ Module 7 — Analytics: 6/6
+  ✅ Module 8 — Tests: 8/8
+  ✅ Module 9 — Deployment: 5/5
+  ✅ Module 10 — Documentation: 5/5
+
+  TOTAL: 63/63 files present
+
+=== FILE EXTENSIONS SUMMARY ===
+
+  .ts             403 files
+  .md             320 files
+  .py             308 files
+  .tsx             74 files
+  .sql             26 files
+  .json            24 files
+  .yml             16 files
+  .yaml            15 files
+  .tf              11 files
+  .(no ext)         9 files
+  .sh               9 files
+  .prisma           7 files
+  .example          3 files
+  .txt              2 files
+  .lock             2 files
+  .dockerfile       2 files
+  .toml             1 files
+  .ini              1 files
+  .mako             1 files
+  .mjs              1 files
+
+=== DATABASE UNIFIED SCHEMA STATS ===
+
+  Schema file: database/prisma/schema.prisma
+  Total lines: 1,889
+  Models:      71
+  Enums:       30
+
+=== DOCS FOLDER SUMMARY ===
+
+  docs/ai/  (18 files)
+  docs/api/  (18 files)
+  docs/architecture/  (33 files)
+  docs/database/  (18 files)
+  docs/deployment/  (1 files)
+  docs/frontend/  (18 files)
+  docs/implementation/  (26 files)
+  docs/infrastructure/  (19 files)
+  docs/operations/  (24 files)
+  docs/research/  (36 files)
+  docs/security/  (4 files)
+  docs/voice-ai/  (0 files)
+  docs/ (root)  (12 files)
+
+======================================================================
+BUILD COMPLETE
+======================================================================

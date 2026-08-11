@@ -1,0 +1,135 @@
+{
+  "name": "Calendar — Appointment Reminders (Multi-Channel)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "cronExpression", "expression": "*/30 * * * *" } ] }
+      },
+      "id": "a2c5-0001-rem-schedule",
+      "name": "Schedule: Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/appointments/upcoming?windowHours=25&includeNotified=false",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2c5-0002-rem-fetch",
+      "name": "Fetch: Appts Next 25 hr",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "id": "a2c5-0003-rem-split",
+      "name": "Split: Per Appointment",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const a = $input.all()[0].json;\nconst start = new Date(a.startTime || a.start || a.scheduledAt);\nconst now = new Date();\nconst minutesToStart = Math.round((start - now) / 60000);\n\nlet stage = null;\nif (minutesToStart > 23 * 60 && minutesToStart <= 25 * 60) stage = 'T_MINUS_24H';\nelse if (minutesToStart > 50 && minutesToStart <= 70) stage = 'T_MINUS_1H';\nelse if (minutesToStart > 10 && minutesToStart <= 20) stage = 'T_MINUS_15M';\n\nif (!stage) return [{ json: { skip: true, reason: `Outside reminder windows (${minutesToStart}min to start)` } }];\n\nconst channelPlan = {\n  T_MINUS_24H: ['EMAIL', 'WHATSAPP'],\n  T_MINUS_1H: ['PUSH', 'IN_APP'],\n  T_MINUS_15M: ['PUSH']\n}[stage];\n\nreturn [{\n  json: {\n    skip: false,\n    stage,\n    channelPlan,\n    minutesToStart,\n    appointmentId: a.id,\n    tenantId: a.tenantId,\n    customerEmail: a.customerEmail,\n    customerPhone: a.customerPhone,\n    customerId: a.customerId,\n    employeeEmail: a.employeeEmail,\n    title: a.title || 'Dayjoy Appointment',\n    startTime: a.startTime || a.start,\n    location: a.meetingLink || a.location || ''\n  }\n}];"
+      },
+      "id": "a2c5-0004-rem-stage",
+      "name": "Code: Determine Reminder Stage",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.skip }}",
+        "rules": { "rules": [ { "value2": "false", "outputKey": "send", "label": "Send Reminders" } ] },
+        "fallbackOutput": 1,
+        "options": {}
+      },
+      "id": "a2c5-0005-rem-switch",
+      "name": "Switch: Send or Skip",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch-multi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channels\": {{ JSON.stringify($('Code: Determine Reminder Stage').item.json.channelPlan) }},\n  \"event\": \"appointment_reminder\",\n  \"stage\": \"{{ $('Code: Determine Reminder Stage').item.json.stage }}\",\n  \"appointmentId\": \"{{ $('Code: Determine Reminder Stage').item.json.appointmentId }}\",\n  \"tenantId\": \"{{ $('Code: Determine Reminder Stage').item.json.tenantId }}\",\n  \"recipientEmail\": \"{{ $('Code: Determine Reminder Stage').item.json.customerEmail }}\",\n  \"recipientPhone\": \"{{ $('Code: Determine Reminder Stage').item.json.customerPhone }}\",\n  \"customerId\": \"{{ $('Code: Determine Reminder Stage').item.json.customerId }}\",\n  \"template\": \"appointment-reminder\",\n  \"metadata\": {\n    \"title\": \"{{ $('Code: Determine Reminder Stage').item.json.title }}\",\n    \"startTime\": \"{{ $('Code: Determine Reminder Stage').item.json.startTime }}\",\n    \"location\": \"{{ $('Code: Determine Reminder Stage').item.json.location }}\",\n    \"minutesToStart\": {{ $('Code: Determine Reminder Stage').item.json.minutesToStart }},\n    \"workflow\": \"appointment-reminders\"\n  }\n}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2c5-0006-rem-dispatch",
+      "name": "Dispatch: Multi-Channel Reminders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/appointments/{{ $('Code: Determine Reminder Stage').item.json.appointmentId }}/mark-notified",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"stage\": \"{{ $('Code: Determine Reminder Stage').item.json.stage }}\",\n  \"channels\": {{ JSON.stringify($('Code: Determine Reminder Stage').item.json.channelPlan) }},\n  \"notifiedAt\": \"{{ $now.toISO() }}\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2c5-0007-rem-mark",
+      "name": "Mark: Appt Reminder Sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"MULTI\",\n  \"event\": \"appointment_reminder_dispatched\",\n  \"appointmentId\": \"{{ $('Code: Determine Reminder Stage').item.json.appointmentId }}\",\n  \"status\": \"SENT\",\n  \"tenantId\": \"{{ $('Code: Determine Reminder Stage').item.json.tenantId }}\",\n  \"metadata\": {\n    \"workflow\": \"appointment-reminders\",\n    \"stage\": \"{{ $('Code: Determine Reminder Stage').item.json.stage }}\",\n    \"channels\": {{ JSON.stringify($('Code: Determine Reminder Stage').item.json.channelPlan) }}\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2c5-0008-rem-audit",
+      "name": "Log: Audit Reminders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Schedule: Every 30 Minutes": { "main": [ [ { "node": "Fetch: Appts Next 25 hr", "type": "main", "index": 0 } ] ] },
+    "Fetch: Appts Next 25 hr": { "main": [ [ { "node": "Split: Per Appointment", "type": "main", "index": 0 } ] ] },
+    "Split: Per Appointment": { "main": [ [ { "node": "Code: Determine Reminder Stage", "type": "main", "index": 0 } ] ] },
+    "Code: Determine Reminder Stage": { "main": [ [ { "node": "Switch: Send or Skip", "type": "main", "index": 0 } ] ] },
+    "Switch: Send or Skip": { "main": [ [ { "node": "Dispatch: Multi-Channel Reminders", "type": "main", "index": 0 } ] ] },
+    "Dispatch: Multi-Channel Reminders": { "main": [ [ { "node": "Mark: Appt Reminder Sent", "type": "main", "index": 0 } ] ] },
+    "Mark: Appt Reminder Sent": { "main": [ [ { "node": "Log: Audit Reminders", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "calendar" }, { "name": "reminder" }, { "name": "multi-channel" }, { "name": "dayjoy" }]
+}

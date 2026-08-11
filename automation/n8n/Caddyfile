@@ -1,0 +1,94 @@
+# =============================================================================
+# Dayjoy n8n — Caddyfile
+# TLS-terminating reverse proxy in front of n8n-main.
+# Caddy auto-provisions Let's Encrypt certs for $N8N_HOST.
+# =============================================================================
+
+{
+    email ops@dayjoy.ai
+    # Rate-limit Let's Encrypt requests in case of restart loops
+    acme_dns cloudflare {$CLOUDFLARE_API_TOKEN}
+}
+
+# ----- n8n UI + webhook -----
+{$N8N_HOST} {
+    # Basic-auth gate (defense-in-depth on top of n8n's own auth)
+    basicauth {
+        {$N8N_ADMIN_USER} {$N8N_ADMIN_PASSWORD}
+    }
+
+    # Webhook path bypasses basic-auth (webhook endpoints sign with HMAC instead)
+    @webhooks path /webhook/* /webhook-test/*
+    handle @webhooks {
+        reverse_proxy n8n-main:5678 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            # n8n requires the correct webhook scheme/host to build URLs
+            header_up X-Forwarded-Host {host}
+            # Increase timeouts for long-running webhook workflows
+            transport http {
+                read_timeout 300s
+                write_timeout 300s
+                dial_timeout 10s
+            }
+        }
+    }
+
+    # Everything else -> n8n UI/API (with basic auth)
+    handle {
+        reverse_proxy n8n-main:5678 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.dayjoy.ai; frame-ancestors 'none'"
+        -Server
+    }
+
+    # Rate-limit on webhook endpoints
+    @webhookrate expression {path} matches "^/webhook/"
+    rate_limit @webhookrate {
+        zone webhook_zone {
+            key {remote_host}
+            events 100
+            window 1m
+        }
+    }
+
+    # Access log
+    log {
+        output file /data/access.log {
+            roll_size 50mb
+            roll_keep 5
+        }
+        format json
+    }
+}
+
+# ----- Grafana (under /grafana subpath) -----
+{$N8N_HOST} {
+    handle_path /grafana/* {
+        reverse_proxy grafana:3000
+    }
+}
+
+# ----- Prometheus (internal-only — bound via security group) -----
+grafana.dayjoy.ai {
+    @internal remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+    handle @internal {
+        reverse_proxy prometheus:9090
+    }
+    respond 403
+}

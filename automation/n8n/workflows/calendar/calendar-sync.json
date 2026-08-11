@@ -1,0 +1,109 @@
+{
+  "name": "Calendar — Bidirectional Sync (15 min)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "cronExpression", "expression": "*/15 * * * *" } ] }
+      },
+      "id": "a2c4-0001-sync-schedule",
+      "name": "Schedule: Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/appointments/sync-since?sinceMinutes=15",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2c4-0002-sync-fetch-db",
+      "name": "Fetch: DB Appointments (last 15m)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "calendarId": { "__rl": true, "value": "primary", "mode": "id" },
+        "returnAll": true,
+        "filters": {
+          "timeMin": "={{ $now.toISO() }}",
+          "timeMax": "={{ $now.plus({ days: 30 }).toISO() }}"
+        },
+        "additionalFields": {}
+      },
+      "id": "a2c4-0003-sync-fetch-gcal",
+      "name": "GCal: List Upcoming Events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [440, 0],
+      "credentials": { "googleCalendarOAuth2Api": { "id": "googleCalendar", "name": "googleCalendar" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "const dbRes = $('Fetch: DB Appointments (last 15m)').all()[0].json;\nconst gcalRes = $('GCal: List Upcoming Events').all();\nconst dbAppts = dbRes.data || dbRes || [];\nconst gcalEvents = gcalRes.map(r => r.json);\n\nconst stats = { dbPushed: 0, gcalPulled: 0, conflicts: 0, errors: 0 };\nconst toPushToGcal = [];\nconst toPullToDb = [];\nconst conflicts = [];\n\n// DB -> GCal (new or recently modified DB appts without GCal ref)\nfor (const appt of dbAppts) {\n  const extRef = appt.externalRefs?.find(r => r.provider === 'GOOGLE_CALENDAR');\n  if (!extRef) {\n    toPushToGcal.push({ appt, action: 'CREATE' });\n    stats.dbPushed++;\n  } else if (appt.updatedAt && extRef.syncedAt && new Date(appt.updatedAt) > new Date(extRef.syncedAt)) {\n    toPushToGcal.push({ appt, action: 'UPDATE', externalEventId: extRef.externalEventId });\n    stats.dbPushed++;\n  }\n}\n\n// GCal -> DB (events in GCal not in DB by extendedProperties.private.dayjoyId)\nconst dbIds = new Set(dbAppts.map(a => a.id));\nfor (const ev of gcalEvents) {\n  const dayjoyId = ev.extendedProperties?.private?.dayjoyId;\n  if (!dayjoyId || !dbIds.has(dayjoyId)) {\n    // It's either an external event or a deleted-from-DB event; log it\n    if (dayjoyId) {\n      // was in DB but now only in GCal -> mark conflict\n      conflicts.push({ type: 'GHOST_IN_GCAL', dayjoyId, eventId: ev.id, summary: ev.summary });\n      stats.conflicts++;\n    } else {\n      toPullToDb.push({ ev, action: 'PULL_AS_EXTERNAL' });\n      stats.gcalPulled++;\n    }\n  }\n}\n\nreturn [{ json: { stats, toPushToGcal, toPullToDb, conflicts, syncStartedAt: new Date().toISOString() } }];"
+      },
+      "id": "a2c4-0004-sync-diff",
+      "name": "Code: Compute Diff",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/appointments/sync-result",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2c4-0005-sync-commit",
+      "name": "Persist: Sync Result to Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"SYSTEM\",\n  \"event\": \"calendar_sync_completed\",\n  \"status\": \"SUCCESS\",\n  \"tenantId\": \"SYSTEM\",\n  \"metadata\": {\n    \"workflow\": \"calendar-sync\",\n    \"stats\": {{ JSON.stringify($('Code: Compute Diff').item.json.stats) }},\n    \"syncStartedAt\": \"{{ $('Code: Compute Diff').item.json.syncStartedAt }}\"\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2c4-0006-sync-audit",
+      "name": "Log: Sync Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Schedule: Every 15 Minutes": { "main": [ [ { "node": "Fetch: DB Appointments (last 15m)", "type": "main", "index": 0 } ] ] },
+    "Fetch: DB Appointments (last 15m)": { "main": [ [ { "node": "GCal: List Upcoming Events", "type": "main", "index": 0 } ] ] },
+    "GCal: List Upcoming Events": { "main": [ [ { "node": "Code: Compute Diff", "type": "main", "index": 0 } ] ] },
+    "Code: Compute Diff": { "main": [ [ { "node": "Persist: Sync Result to Backend", "type": "main", "index": 0 } ] ] },
+    "Persist: Sync Result to Backend": { "main": [ [ { "node": "Log: Sync Status", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "calendar" }, { "name": "sync" }, { "name": "google" }, { "name": "dayjoy" }]
+}

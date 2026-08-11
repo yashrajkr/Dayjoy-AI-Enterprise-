@@ -1,0 +1,146 @@
+{
+  "name": "Dayjoy — Webhook HMAC Signature Verification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "dayjoy/incoming",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "7a8b9c0d-0001-4000-8000-000000000001",
+      "name": "Webhook (Incoming)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "dayjoy-incoming-webhook-demo",
+      "notes": "Receives POST /webhook/dayjoy/incoming. Expects header X-Dayjoy-Signature: t=<timestamp>,v1=<hmac-sha256-hex>. The raw body is what was signed — n8n provides it as $json.body."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the X-Dayjoy-Signature header and verify the HMAC-SHA256 signature.\n// Header format:  t=<unix-ts>,v1=<hex-hmac>\n// Signed payload:  `<timestamp>.<raw-body-json>`\n//\n// REPLAY PROTECTION: reject if timestamp is older than 5 minutes.\n// TIMING-SAFE COMPARE: prevents timing side-channel attacks.\n\nconst header = $json.headers?.['x-dayjoy-signature'] || $json.headers?.['X-Dayjoy-Signature'] || '';\nif (!header) {\n  return { json: { verified: false, reason: 'missing_signature_header', http_status: 401 } };\n}\n\nconst parts = {};\nheader.split(',').forEach(p => {\n  const [k, v] = p.split('=');\n  parts[k.trim()] = v.trim();\n});\n\nconst ts = parts['t'];\nconst sig = parts['v1'];\nif (!ts || !sig) {\n  return { json: { verified: false, reason: 'malformed_signature_header', http_status: 401 } };\n}\n\n// Replay protection — reject anything older than 5 minutes\nconst now = Math.floor(Date.now() / 1000);\nconst skew = Math.abs(now - parseInt(ts, 10));\nif (skew > 300) {\n  return { json: { verified: false, reason: 'timestamp_out_of_window', skew_seconds: skew, http_status: 401 } };\n}\n\n// Pull the signing secret from n8n credentials (NOT env vars — env vars leak in workflow JSON)\nconst webhookSecret = $node['Webhook Secret Credential'].credentials?.webhookSecret ||\n                      $credentials?.dayjoyWebhookSigningSecret?.secret;\nif (!webhookSecret) {\n  return { json: { verified: false, reason: 'missing_signing_secret', http_status: 500 } };\n}\n\n// Reconstruct the signed payload:  `<timestamp>.<raw-body>`\nconst rawBody = typeof $json.body === 'string' ? $json.body : JSON.stringify($json.body);\nconst signedPayload = `${ts}.${rawBody}`;\n\n// Compute HMAC-SHA256 using Node's crypto module\nconst crypto = require('crypto');\nconst computed = crypto.createHmac('sha256', webhookSecret).update(signedPayload).digest('hex');\n\n// Timing-safe comparison\nconst a = Buffer.from(computed, 'hex');\nconst b = Buffer.from(sig, 'hex');\nconst verified = a.length === b.length && crypto.timingSafeEqual(a, b);\n\nreturn {\n  json: {\n    verified,\n    reason: verified ? 'ok' : 'signature_mismatch',\n    timestamp: ts,\n    skew_seconds: skew,\n    http_status: verified ? 200 : 401\n  }\n};\n"
+      },
+      "id": "7a8b9c0d-0001-4000-8000-000000000002",
+      "name": "Verify HMAC Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0],
+      "notes": "Crypto-verified HMAC-SHA256 with timing-safe compare. Rejects: missing header, malformed header, timestamps >5min old, signature mismatch."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "id": "c-verified", "leftValue": "={{ $json.verified }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "7a8b9c0d-0001-4000-8000-000000000003",
+      "name": "Signature Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/webhook-events",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-Webhook-Source", "value": "dayjoy-incoming" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Webhook (Incoming)').item.json.body) }}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "7a8b9c0d-0001-4000-8000-000000000004",
+      "name": "Forward Verified Payload",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, -200],
+      "notes": "Only after signature verification passes does the payload reach the backend. Backend trusts the n8n forward (which is itself authenticated with the Dayjoy service token)."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/audit-logs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"event_type\": \"webhook_signature_verification_failed\",\n  \"severity\": \"warning\",\n  \"resource\": \"n8n_webhook\",\n  \"resource_id\": \"dayjoy-incoming\",\n  \"actor\": $json.headers?.['x-forwarded-for'] || 'unknown',\n  \"details\": { reason: $json.reason, timestamp: $json.timestamp, skew_seconds: $json.skew_seconds },\n  \"timestamp\": new Date().toISOString()\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "7a8b9c0d-0001-4000-8000-000000000005",
+      "name": "Log Failed Verification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 100],
+      "notes": "Every failed verification is logged for security analysis (potential attacker probing the endpoint)."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\", \"processed_at\": \"{{ new Date().toISOString() }}\" }",
+        "options": { "responseCode": 200 }
+      },
+      "id": "7a8b9c0d-0001-4000-8000-000000000006",
+      "name": "Respond 200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [940, -200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"error\", \"reason\": \"{{ $json.reason }}\" }",
+        "options": { "responseCode": "={{ $json.http_status || 401 }}" }
+      },
+      "id": "7a8b9c0d-0001-4000-8000-000000000007",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [940, 100]
+    }
+  ],
+  "connections": {
+    "Webhook (Incoming)": { "main": [ [{ "node": "Verify HMAC Signature", "type": "main", "index": 0 }] ] },
+    "Verify HMAC Signature": { "main": [ [{ "node": "Signature Valid?", "type": "main", "index": 0 }] ] },
+    "Signature Valid?": {
+      "main": [
+        [ { "node": "Forward Verified Payload", "type": "main", "index": 0 } ],
+        [ { "node": "Log Failed Verification", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Forward Verified Payload": { "main": [ [{ "node": "Respond 200 OK", "type": "main", "index": 0 }] ] },
+    "Log Failed Verification": { "main": [ [{ "node": "Respond 401", "type": "main", "index": 0 }] ] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": true,
+  "tags": [{ "name": "security" }, { "name": "webhook" }, { "name": "reference" }],
+  "meta": {
+    "templateCreatedBy": "Dayjoy Platform Team",
+    "description": "Reference workflow showing HMAC-SHA256 signature verification for incoming webhooks. Expects X-Dayjoy-Signature header (t=<ts>,v1=<hmac>). Uses timing-safe compare + 5-minute replay window. Signing secret stored in n8n credentials (NOT env). Failed verifications are logged to audit. Verified payloads are forwarded to the backend.",
+    "version": "1.0.0",
+    "referenceDoc": "See security/security-checklist.md §3 Webhook Security."
+  }
+}

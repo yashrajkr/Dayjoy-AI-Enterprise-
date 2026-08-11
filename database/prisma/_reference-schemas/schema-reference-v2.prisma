@@ -1,0 +1,728 @@
+// Dayjoy Enterprise AI Platform - Prisma Schema
+// This schema is aligned with the SQL migrations 001–003 and seed script.
+
+// =====================================
+// Generators & Data Source
+// =====================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================
+// Enums (aligned with PostgreSQL enums)
+// =====================================
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum CustomerType {
+  INDIVIDUAL
+  BUSINESS
+}
+
+enum DistributorStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+  DELETED
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  CONVERTED
+  LOST
+  DELETED
+}
+
+enum InteractionType {
+  CALL
+  EMAIL
+  MEETING
+  MESSAGE
+  NOTE
+  OTHER
+}
+
+enum ChannelType {
+  VOICE
+  WHATSAPP
+  WEB
+  API
+}
+
+enum AgentType {
+  SUPPORT
+  SALES
+  ONBOARDING
+  TECHNICAL
+  BILLING
+  DISTRIBUTOR
+  ADMIN
+  VOICE
+  WHATSAPP
+  WEB
+}
+
+enum MemoryType {
+  FACT
+  PREFERENCE
+  HISTORY
+  CONTEXT
+}
+
+// OrderStatus used in orders table
+enum OrderStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  CANCELLED
+}
+
+// =====================================
+// Core Multi-tenant & RBAC Models
+// =====================================
+
+model Tenant {
+  id        String        @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String        @unique
+  status    TenantStatus  @default(ACTIVE)
+  settings  Json?
+  createdAt DateTime      @default(now()) @db.Timestamptz
+  updatedAt DateTime      @default(now()) @db.Timestamptz
+
+  // Relations
+  users         User[]
+  sessions      UserSession[]
+  roles         Role[]
+  customers     Customer[]
+  distributors  Distributor[]
+  productCategories ProductCategory[]
+  products      Product[]
+  orders        Order[]
+  leads         Lead[]
+  interactions  Interaction[]
+  followUps     FollowUp[]
+  aiAgents      AiAgent[]
+  conversations Conversation[]
+  messages      Message[]
+  aiMemory      AiMemory[]
+  ragSources    RagSource[]
+  ragDocuments  RagDocument[]
+  ragChunks     RagChunk[]
+  embeddings    Embedding[]
+
+  @@map("tenants")
+}
+
+model User {
+  id           String      @id @default(uuid()) @db.Uuid
+  tenantId     String      @db.Uuid
+  email        String      @unique
+  passwordHash String?
+  phone        String?
+  firstName    String?
+  lastName     String?
+  status       UserStatus  @default(ACTIVE)
+  lastLoginAt  DateTime?   @db.Timestamptz
+  createdAt    DateTime    @default(now()) @db.Timestamptz
+  updatedAt    DateTime    @default(now()) @db.Timestamptz
+
+  // Relations
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sessions    UserSession[]
+  userRoles   UserRole[]
+  customers   Customer[]
+  distributors Distributor[]
+  leadsAssigned Lead[]     @relation("LeadAssignedTo")
+  interactions Interaction[]
+  followUpsAssigned FollowUp[] @relation("FollowUpAssignedTo")
+  aiMemory    AiMemory[]
+  conversations Conversation[]
+
+  @@map("users")
+
+  @@index([tenantId])
+  @@index([email])
+  @@index([status])
+  @@index([tenantId, email])
+}
+
+model UserSession {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @db.Uuid
+  tenantId   String   @db.Uuid
+  tokenHash  String   @unique
+  ipAddress  String?  @db.Inet
+  userAgent  String?
+  expiresAt  DateTime @db.Timestamptz
+  createdAt  DateTime @default(now()) @db.Timestamptz
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("user_sessions")
+
+  @@index([userId])
+  @@index([tenantId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+  @@index([createdAt])
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  name        String
+  description String?
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  updatedAt   DateTime @default(now()) @db.Timestamptz
+
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+
+  @@map("roles")
+  @@unique([tenantId, name], name: "roles_tenant_id_name_unique")
+
+  @@index([tenantId])
+  @@index([tenantId, name])
+  @@index([isSystem])
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  resource    String
+  action      String
+  description String?
+  createdAt   DateTime @default(now()) @db.Timestamptz
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+  @@unique([resource, action])
+
+  @@index([resource])
+  @@index([resource, action])
+}
+
+model RolePermission {
+  roleId      String   @db.Uuid
+  permissionId String  @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamptz
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+
+  @@index([roleId])
+  @@index([permissionId])
+}
+
+model UserRole {
+  userId     String   @db.Uuid
+  roleId     String   @db.Uuid
+  tenantId   String   @db.Uuid
+  assignedBy String?  @db.Uuid
+  assignedAt DateTime @default(now()) @db.Timestamptz
+  expiresAt  DateTime? @db.Timestamptz
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedByUser User? @relation("UserRoleAssignedBy", fields: [assignedBy], references: [id])
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+
+  @@index([userId])
+  @@index([roleId])
+  @@index([tenantId])
+}
+
+// =====================================
+// Business Domain Models
+// =====================================
+
+model ProductCategory {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  parentId    String?  @db.Uuid
+  name        String
+  slug        String
+  description String?
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  updatedAt   DateTime @default(now()) @db.Timestamptz
+
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parent   ProductCategory? @relation("CategoryParent", fields: [parentId], references: [id])
+  children ProductCategory[] @relation("CategoryParent")
+  products Product[]
+
+  @@map("product_categories")
+  @@unique([tenantId, slug])
+
+  @@index([tenantId])
+  @@index([parentId])
+  @@index([slug])
+}
+
+model Product {
+  id             String        @id @default(uuid()) @db.Uuid
+  tenantId       String        @db.Uuid
+  categoryId     String?       @db.Uuid
+  sku            String
+  name           String
+  description    String?
+  price          Decimal       @db.Numeric(12, 2)
+  cost           Decimal?      @db.Numeric(12, 2)
+  currency       String        @default("USD")
+  inventoryCount Int           @default(0)
+  attributes     Json?
+  images         Json?
+  status         ProductStatus @default(ACTIVE)
+  createdAt      DateTime      @default(now()) @db.Timestamptz
+  updatedAt      DateTime      @default(now()) @db.Timestamptz
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category ProductCategory? @relation(fields: [categoryId], references: [id])
+  orderItems OrderItem[]
+
+  @@map("products")
+  @@unique([tenantId, sku])
+
+  @@index([tenantId])
+  @@index([categoryId])
+  @@index([status])
+}
+
+model Customer {
+  id           String       @id @default(uuid()) @db.Uuid
+  tenantId     String       @db.Uuid
+  userId       String?      @db.Uuid
+  customerType CustomerType @default(INDIVIDUAL)
+  companyName  String?
+  firstName    String?
+  lastName     String?
+  email        String?
+  phone        String?
+  address      Json?
+  status       String        @default("active")
+  createdAt    DateTime     @default(now()) @db.Timestamptz
+  updatedAt    DateTime     @default(now()) @db.Timestamptz
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id])
+  orders  Order[]
+  interactions Interaction[]
+  followUps FollowUp[]
+  aiMemory AiMemory[]
+  conversations Conversation[]
+
+  @@map("customers")
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([email])
+  @@index([phone])
+  @@index([status])
+}
+
+model Distributor {
+  id             String            @id @default(uuid()) @db.Uuid
+  tenantId       String            @db.Uuid
+  userId         String?           @db.Uuid
+  distributorCode String           @unique
+  companyName    String
+  contactPerson  String?
+  email          String            @unique
+  phone          String?
+  address        Json?
+  commissionRate Decimal?          @db.Numeric(5, 2)
+  status         DistributorStatus @default(ACTIVE)
+  createdAt      DateTime          @default(now()) @db.Timestamptz
+  updatedAt      DateTime          @default(now()) @db.Timestamptz
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id])
+  orders Order[]
+
+  @@map("distributors")
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([status])
+}
+
+model Order {
+  id            String       @id @default(uuid()) @db.Uuid
+  tenantId      String       @db.Uuid
+  customerId    String       @db.Uuid
+  distributorId String?      @db.Uuid
+  orderNumber   String       @unique
+  status        OrderStatus  @default(PENDING)
+  subtotal      Decimal      @default(0) @db.Numeric(12, 2)
+  tax           Decimal      @default(0) @db.Numeric(12, 2)
+  shipping      Decimal      @default(0) @db.Numeric(12, 2)
+  discount      Decimal      @default(0) @db.Numeric(12, 2)
+  total         Decimal      @default(0) @db.Numeric(12, 2)
+  currency      String       @default("USD")
+  shippingAddress Json?
+  billingAddress  Json?
+  metadata      Json?
+  createdAt     DateTime     @default(now()) @db.Timestamptz
+  updatedAt     DateTime     @default(now()) @db.Timestamptz
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer    Customer    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  distributor Distributor? @relation(fields: [distributorId], references: [id])
+  items       OrderItem[]
+
+  @@map("orders")
+
+  @@index([tenantId])
+  @@index([customerId])
+  @@index([distributorId])
+  @@index([orderNumber])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id         String   @id @default(uuid()) @db.Uuid
+  orderId    String   @db.Uuid
+  productId  String   @db.Uuid
+  quantity   Int      @default(1)
+  unitPrice  Decimal  @default(0) @db.Numeric(12, 2)
+  subtotal   Decimal  @default(0) @db.Numeric(12, 2)
+  tax        Decimal? @db.Numeric(12, 2)
+  discount   Decimal? @db.Numeric(12, 2)
+  total      Decimal  @default(0) @db.Numeric(12, 2)
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@map("order_items")
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+model Lead {
+  id         String     @id @default(uuid()) @db.Uuid
+  tenantId   String     @db.Uuid
+  sourceId   String?    @db.Uuid
+  assignedTo String?    @db.Uuid
+  firstName  String?
+  lastName   String?
+  email      String?
+  phone      String?
+  company    String?
+  status     LeadStatus @default(NEW)
+  score      Int        @default(0)
+  metadata   Json?
+  createdAt  DateTime   @default(now()) @db.Timestamptz
+  updatedAt  DateTime   @default(now()) @db.Timestamptz
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedUser User? @relation("LeadAssignedTo", fields: [assignedTo], references: [id])
+  interactions Interaction[]
+  followUps    FollowUp[]
+  aiMemory     AiMemory[]
+  conversations Conversation[]
+
+  @@map("leads")
+
+  @@index([tenantId])
+  @@index([sourceId])
+  @@index([assignedTo])
+  @@index([email])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Interaction {
+  id                String          @id @default(uuid()) @db.Uuid
+  tenantId          String          @db.Uuid
+  customerId        String?         @db.Uuid
+  leadId            String?         @db.Uuid
+  userId            String          @db.Uuid
+  type              InteractionType
+  subject           String?
+  description       String?
+  outcome           String?
+  followUpRequired  Boolean         @default(false)
+  followUpDate      DateTime?       @db.Timestamptz
+  metadata          Json?
+  createdAt         DateTime        @default(now()) @db.Timestamptz
+
+  tenant   Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id])
+  lead     Lead?     @relation(fields: [leadId], references: [id])
+  user     User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  followUps FollowUp[]
+
+  @@map("interactions")
+
+  @@index([tenantId])
+  @@index([customerId])
+  @@index([leadId])
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+model FollowUp {
+  id           String          @id @default(uuid()) @db.Uuid
+  tenantId     String          @db.Uuid
+  interactionId String?        @db.Uuid
+  assignedTo   String          @db.Uuid
+  customerId   String?         @db.Uuid
+  leadId       String?         @db.Uuid
+  type         InteractionType
+  subject      String
+  description  String?
+  status       String          @default("pending")
+  dueDate      DateTime        @db.Timestamptz
+  completedAt  DateTime?       @db.Timestamptz
+  metadata     Json?
+  createdAt    DateTime        @default(now()) @db.Timestamptz
+  updatedAt    DateTime        @default(now()) @db.Timestamptz
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  interaction Interaction? @relation(fields: [interactionId], references: [id])
+  assignedUser User        @relation("FollowUpAssignedTo", fields: [assignedTo], references: [id], onDelete: Restrict)
+  customer    Customer?    @relation(fields: [customerId], references: [id])
+  lead        Lead?        @relation(fields: [leadId], references: [id])
+
+  @@map("follow_ups")
+
+  @@index([tenantId])
+  @@index([assignedTo])
+  @@index([customerId])
+  @@index([leadId])
+  @@index([type])
+  @@index([status])
+  @@index([dueDate])
+}
+
+// =====================================
+// AI & RAG Models
+// =====================================
+
+model AiAgent {
+  id           String    @id @default(uuid()) @db.Uuid
+  tenantId     String    @db.Uuid
+  name         String
+  type         AgentType
+  description  String?
+  configuration Json?
+  capabilities Json?
+  status       String    @default("active")
+  createdAt    DateTime  @default(now()) @db.Timestamptz
+  updatedAt    DateTime  @default(now()) @db.Timestamptz
+
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@map("ai_agents")
+
+  @@index([tenantId])
+  @@index([type])
+  @@index([status])
+}
+
+model Conversation {
+  id          String      @id @default(uuid()) @db.Uuid
+  tenantId    String      @db.Uuid
+  agentId     String      @db.Uuid
+  userId      String?     @db.Uuid
+  customerId  String?     @db.Uuid
+  channel     ChannelType
+  sessionId   String?
+  status      String      @default("active")
+  context     Json?
+  metadata    Json?
+  startedAt   DateTime    @default(now()) @db.Timestamptz
+  endedAt     DateTime?   @db.Timestamptz
+  createdAt   DateTime    @default(now()) @db.Timestamptz
+  updatedAt   DateTime    @default(now()) @db.Timestamptz
+
+  tenant   Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent    AiAgent @relation(fields: [agentId], references: [id], onDelete: Restrict)
+  user     User?   @relation(fields: [userId], references: [id])
+  customer Customer? @relation(fields: [customerId], references: [id])
+  messages Message[]
+
+  @@map("conversations")
+
+  @@index([tenantId])
+  @@index([agentId])
+  @@index([userId])
+  @@index([customerId])
+  @@index([channel])
+  @@index([status])
+  @@index([startedAt])
+}
+
+model Message {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @db.Uuid
+  conversationId String   @db.Uuid
+  role           String   // user, assistant, system
+  content        String
+  contentType    String   @default("text")
+  metadata       Json?
+  tokensUsed     Int?
+  createdAt      DateTime @default(now()) @db.Timestamptz
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
+
+  @@index([tenantId])
+  @@index([conversationId])
+  @@index([createdAt])
+  @@index([conversationId, createdAt])
+}
+
+model AiMemory {
+  id          String     @id @default(uuid()) @db.Uuid
+  tenantId    String     @db.Uuid
+  userId      String?    @db.Uuid
+  customerId  String?    @db.Uuid
+  type        MemoryType
+  key         String
+  value       String
+  importance  Int        @default(5)
+  expiresAt   DateTime?  @db.Timestamptz
+  metadata    Json?
+  createdAt   DateTime   @default(now()) @db.Timestamptz
+  updatedAt   DateTime   @default(now()) @db.Timestamptz
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user     User?    @relation(fields: [userId], references: [id])
+  customer Customer? @relation(fields: [customerId], references: [id])
+
+  @@map("ai_memory")
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([customerId])
+  @@index([type])
+  @@index([key])
+  @@index([expiresAt])
+}
+
+model RagSource {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @db.Uuid
+  name         String
+  type         String   // document, website, database, api, manual
+  description  String?
+  configuration Json?
+  status       String   @default("active")
+  createdAt    DateTime @default(now()) @db.Timestamptz
+  updatedAt    DateTime @default(now()) @db.Timestamptz
+
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  documents RagDocument[]
+
+  @@map("rag_sources")
+
+  @@index([tenantId])
+  @@index([type])
+  @@index([status])
+}
+
+model RagDocument {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  sourceId    String   @db.Uuid
+  title       String
+  content     String?
+  metadata    Json?
+  wordCount   Int?
+  status      String   @default("processed")
+  processedAt DateTime? @db.Timestamptz
+  createdAt   DateTime  @default(now()) @db.Timestamptz
+  updatedAt   DateTime  @default(now()) @db.Timestamptz
+
+  tenant  Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  source  RagSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  chunks  RagChunk[]
+
+  @@map("rag_documents")
+
+  @@index([tenantId])
+  @@index([sourceId])
+  @@index([status])
+  @@index([title])
+}
+
+model RagChunk {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  documentId  String   @db.Uuid
+  chunkIndex  Int
+  content     String
+  embedding   Bytes?   // pgvector stored as bytea
+  metadata    Json?
+  createdAt   DateTime @default(now()) @db.Timestamptz
+
+  tenant   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document RagDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("rag_chunks")
+  @@unique([documentId, chunkIndex])
+
+  @@index([tenantId])
+  @@index([documentId])
+  @@index([chunkIndex])
+}
+
+model Embedding {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  entityType  String
+  entityId    String   @db.Uuid
+  embedding   Bytes    // pgvector stored as bytea
+  metadata    Json?
+  createdAt   DateTime @default(now()) @db.Timestamptz
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("embeddings")
+
+  @@index([tenantId])
+  @@index([entityType, entityId])
+}

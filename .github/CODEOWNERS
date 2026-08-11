@@ -1,0 +1,21 @@
+# Default owners
+* @dayjoy/platform-team
+
+# Database
+/database/ @dayjoy/data-team
+
+# Voice AI
+/vapi/ @dayjoy/voice-team
+
+# RAG
+/rag/ @dayjoy/ai-team
+
+# Backend
+/backend/ @dayjoy/backend-team
+
+# Frontend
+/apps/ @dayjoy/frontend-team
+
+# Infrastructure
+/deployment/ @dayjoy/devops-team
+/monitoring/ @dayjoy/devops-team

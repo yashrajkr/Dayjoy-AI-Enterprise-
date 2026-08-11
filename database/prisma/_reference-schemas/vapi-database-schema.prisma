@@ -1,0 +1,101 @@
+// Voice Sessions Schema for Prisma
+// Add this to your existing schema.prisma file
+
+// Voice Call Sessions
+model VoiceSession {
+  id                  String   @id @default(uuid())
+  tenantId            String   @map("tenant_id")
+  callId              String   @unique @map("call_id") // Vapi call ID
+  conversationId      String?  @map("conversation_id") // Link to AI conversation
+  customerId          String?  @map("customer_id")
+  distributorId       String?  @map("distributor_id")
+  userId              String?  @map("user_id")
+  phoneNumber         String   @map("phone_number")
+  status              String   // active, ended, failed
+  direction           String   // inbound, outbound
+  recordingUrl        String?  @map("recording_url")
+  transcript          String?  @db.Text
+  durationSeconds     Int?     @map("duration_seconds")
+  metadata            Json
+  assistantId         String?  @map("assistant_id")
+  assistantName       String?  @map("assistant_name")
+  startedAt           DateTime @map("started_at") @db.Timestamp
+  endedAt             DateTime? @map("ended_at") @db.Timestamp
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  // Indexes
+  @@index([tenant_id])
+  @@index([call_id])
+  @@index([conversation_id])
+  @@index([customer_id])
+  @@index([distributor_id])
+  @@index([status])
+  @@index([started_at])
+  @@index([created_at])
+
+  // Relations
+  tenant          Tenant          @relation(fields: [tenantId], references: [id])
+  conversation    Conversation?   @relation(fields: [conversationId], references: [id])
+  customer        Customer?       @relation(fields: [customerId], references: [id])
+  distributor     Distributor?    @relation(fields: [distributorId], references: [id])
+  user            User?           @relation(fields: [userId], references: [id])
+
+  // Table comment
+  @@map("voice_sessions")
+}
+
+// Voice Call Transcripts
+model VoiceTranscript {
+  id          String   @id @default(uuid())
+  sessionId   String   @map("session_id")
+  tenantId    String   @map("tenant_id")
+  role        String   // user, assistant
+  content     String   @db.Text
+  timestamp   DateTime @db.Timestamp
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Indexes
+  @@index([session_id])
+  @@index([tenant_id])
+  @@index([timestamp])
+
+  // Relations
+  session VoiceSession @relation(fields: [sessionId], references: [id])
+  tenant  Tenant       @relation(fields: [tenantId], references: [id])
+
+  @@map("voice_transcripts")
+}
+
+// Voice Call Analytics
+model VoiceAnalytics {
+  id              String   @id @default(uuid())
+  sessionId       String   @unique @map("session_id")
+  tenantId        String   @map("tenant_id")
+  callDuration    Int      @map("call_duration")
+  talkTime        Int?     @map("talk_time") // User talk time
+  listenTime      Int?     @map("listen_time") // Assistant talk time
+  silenceTime     Int?     @map("silence_time")
+  interruptionCount Int    @default(0) @map("interruption_count")
+  toolCalls       Int      @default(0) @map("tool_calls")
+  ragQueries      Int      @default(0) @map("rag_queries")
+  sentiment       String?  // positive, neutral, negative
+  resolution      String?  // resolved, escalated, abandoned
+  customerSatisfaction Int? @map("customer_satisfaction") // 1-5
+  cost            Decimal? @db.Decimal(10, 4)
+  metadata        Json
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  // Indexes
+  @@index([session_id])
+  @@index([tenant_id])
+  @@index([sentiment])
+  @@index([resolution])
+  @@index([created_at])
+
+  // Relations
+  session VoiceSession @relation(fields: [sessionId], references: [id])
+  tenant  Tenant       @relation(fields: [tenantId], references: [id])
+
+  @@map("voice_analytics")
+}

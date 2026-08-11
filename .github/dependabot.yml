@@ -1,0 +1,72 @@
+# Dependabot configuration for Dayjoy AI Platform.
+#
+# Keeps npm / Docker / GitHub Actions / Terraform dependencies up to date
+# across the polyglot monorepo. Each ecosystem is configured for its own
+# sub-tree so Dependabot raises scoped PRs that map cleanly to CODEOWNERS.
+#
+# Reviewers are only specified for the root npm group (platform team); other
+# ecosystems fall back to the repo's default review request rules.
+version: 2
+updates:
+  # Root package.json (workspace tooling, shared devDeps).
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 10
+    reviewers: ['dayjoy/platform-team']
+
+  # NestJS backend.
+  - package-ecosystem: 'npm'
+    directory: '/backend'
+    schedule:
+      interval: 'weekly'
+
+  # Admin dashboard (Next.js) frontend.
+  - package-ecosystem: 'npm'
+    directory: '/apps/admin-dashboard'
+    schedule:
+      interval: 'weekly'
+
+  # Customer portal (Next.js) frontend.
+  - package-ecosystem: 'npm'
+    directory: '/apps/customer-portal'
+    schedule:
+      interval: 'weekly'
+
+  # Distributor portal (Next.js) frontend.
+  - package-ecosystem: 'npm'
+    directory: '/apps/distributor-portal'
+    schedule:
+      interval: 'weekly'
+
+  # Employee portal (Next.js) frontend.
+  - package-ecosystem: 'npm'
+    directory: '/apps/employee-portal'
+    schedule:
+      interval: 'weekly'
+
+  # Website chat (Next.js) frontend.
+  - package-ecosystem: 'npm'
+    directory: '/apps/website-chat'
+    schedule:
+      interval: 'weekly'
+
+  # Docker images referenced from compose / Dockerfiles.
+  - package-ecosystem: 'docker'
+    directory: '/deployment/docker'
+    schedule:
+      interval: 'monthly'
+
+  # GitHub Actions used in workflows under .github/workflows.
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'monthly'
+
+  # Terraform modules under deployment/terraform.
+  - package-ecosystem: 'terraform'
+    directory: '/deployment/terraform'
+    schedule:
+      interval: 'monthly'

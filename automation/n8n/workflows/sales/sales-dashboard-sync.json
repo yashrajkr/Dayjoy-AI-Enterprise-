@@ -1,0 +1,289 @@
+{
+  "name": "Sales — Real-time Dashboard Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sales-dashboard-sync",
+        "responseMode": "responseNode",
+        "options": {
+          "rawData": true,
+          "binaryPropertyName": "data"
+        }
+      },
+      "id": "a1-sales-dash-001",
+      "name": "Order Event Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "a8f3b2c7-sales-dashboard-sync-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst headers = items[0].json.headers || {};\nconst secret = process.env.DAYJOY_WEBHOOK_SECRET;\nconst signature = headers['x-dayjoy-signature'];\nconst timestamp = headers['x-dayjoy-timestamp'];\nconst eventId = headers['x-dayjoy-event-id'];\nconst eventType = headers['x-dayjoy-event'];\nif (!signature || !timestamp || !eventId || !eventType) throw new Error('Missing required headers');\nif (Math.abs(Math.floor(Date.now()/1000) - parseInt(timestamp,10)) > 300) throw new Error('Stale timestamp');\nconst bodyBuffer = await this.helpers.getBinaryDataBuffer(items[0], 'data');\nconst expected = 'sha256=' + crypto.createHmac('sha256', secret).update(bodyBuffer).digest('hex');\nconst sigBuf = Buffer.from(signature), expBuf = Buffer.from(expected);\nif (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) throw new Error('Invalid signature');\nconst ALLOWED = ['order.created', 'order.status_changed', 'order.payment_received'];\nif (!ALLOWED.includes(eventType)) throw new Error('Unexpected event: ' + eventType);\nconst payload = JSON.parse(bodyBuffer.toString('utf8'));\npayload._meta = { eventId, eventType, receivedAt: new Date().toISOString() };\nreturn [{ json: payload }];"
+      },
+      "id": "a1-sales-dash-002",
+      "name": "Verify HMAC Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/automation/event-dedup",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_AUTOMATION_JWT }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"eventId\":\"{{ $json._meta.eventId }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-dash-003",
+      "name": "Event Dedup Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/analytics/sales/refresh",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"eventType\":\"{{ $json._meta.eventType }}\",\"orderId\":\"{{ $json.orderId || $json.id }}\",\"distributorId\":\"{{ $json.distributorId || '' }}\",\"amount\":{{ $json.amount || $json.total || 0 }},\"status\":\"{{ $json.status || $json.newStatus || '' }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-dash-004",
+      "name": "Refresh Sales Metrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/analytics/sales/refresh — incrementally update metrics cache"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/admin/dashboard-broadcast",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"event\":\"sales_metric_update\",\"channel\":\"admin-dashboard\",\"payload\":{\"eventType\":\"{{ $('Verify HMAC Signature').item.json._meta.eventType }}\",\"orderId\":\"{{ $('Verify HMAC Signature').item.json.orderId || $('Verify HMAC Signature').item.json.id }}\",\"amount\":{{ $('Verify HMAC Signature').item.json.amount || $('Verify HMAC Signature').item.json.total || 0 }},\"timestamp\":\"{{ new Date().toISOString() }}\"}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-dash-005",
+      "name": "Push Update to Admin Dashboard",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/admin/dashboard-broadcast — backend broadcasts to admin-dashboard websocket subscribers. n8n does NOT hold websocket connections; backend multiplexes."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "value1": "={{ $('Verify HMAC Signature').item.json.distributorId }}",
+              "operation": "isNotEmpty",
+              "outputKey": "has_distributor"
+            }
+          ]
+        },
+        "fallbackOutput": 1
+      },
+      "id": "a1-sales-dash-006",
+      "name": "Distributor Linked?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/distributors/{{ $('Verify HMAC Signature').item.json.distributorId }}/sales-totals/refresh",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"orderId\":\"{{ $('Verify HMAC Signature').item.json.orderId || $('Verify HMAC Signature').item.json.id }}\",\"amount\":{{ $('Verify HMAC Signature').item.json.amount || $('Verify HMAC Signature').item.json.total || 0 }},\"eventType\":\"{{ $('Verify HMAC Signature').item.json._meta.eventType }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-dash-007",
+      "name": "Update Distributor Sales Total",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 220],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/distributors/:id/sales-totals/refresh — recompute distributor YTD/MTD totals"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/admin/dashboard-broadcast",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"event\":\"distributor_sales_update\",\"channel\":\"distributor-portal:{{ $('Verify HMAC Signature').item.json.distributorId }}\",\"payload\":{\"distributorId\":\"{{ $('Verify HMAC Signature').item.json.distributorId }}\",\"orderId\":\"{{ $('Verify HMAC Signature').item.json.orderId || $('Verify HMAC Signature').item.json.id }}\",\"amount\":{{ $('Verify HMAC Signature').item.json.amount || $('Verify HMAC Signature').item.json.total || 0 }},\"timestamp\":\"{{ new Date().toISOString() }}\"}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-sales-dash-008",
+      "name": "Push to Distributor Portal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 220],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "Push to distributor's own portal channel so their dashboard updates in real-time"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true,\"eventId\":\"{{ $('Verify HMAC Signature').item.json._meta.eventId }}\"}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "a1-sales-dash-009",
+      "name": "Respond 200 Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1760, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"error\":\"invalid_signature\"}",
+        "options": { "responseCode": 401 }
+      },
+      "id": "a1-sales-dash-010",
+      "name": "Respond 401 Auth",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [220, 540]
+    }
+  ],
+  "connections": {
+    "Order Event Webhook": {
+      "main": [
+        [
+          { "node": "Verify HMAC Signature", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Verify HMAC Signature": {
+      "main": [
+        [
+          { "node": "Event Dedup Check", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Event Dedup Check": {
+      "main": [
+        [
+          { "node": "Refresh Sales Metrics", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Refresh Sales Metrics": {
+      "main": [
+        [
+          { "node": "Push Update to Admin Dashboard", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Push Update to Admin Dashboard": {
+      "main": [
+        [
+          { "node": "Distributor Linked?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Distributor Linked?": {
+      "main": [
+        [
+          { "node": "Update Distributor Sales Total", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Respond 200 Success", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Update Distributor Sales Total": {
+      "main": [
+        [
+          { "node": "Push to Distributor Portal", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Push to Distributor Portal": {
+      "main": [
+        [
+          { "node": "Respond 200 Success", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "tags": [
+    { "name": "sales" },
+    { "name": "realtime" },
+    { "name": "agent-a1" }
+  ],
+  "meta": {
+    "templateCreatedBy": "Agent A1 — CRM/Sales/Leads",
+    "description": "Real-time sales dashboard sync. Triggered by order.created / order.status_changed / order.payment_received. Refreshes sales metrics cache, broadcasts to admin dashboard websocket subscribers, refreshes distributor sales totals, pushes to distributor's portal channel. n8n does NOT hold websocket connections — backend multiplexes the broadcast via POST /api/admin/dashboard-broadcast."
+  }
+}

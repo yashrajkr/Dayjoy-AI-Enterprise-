@@ -1,0 +1,190 @@
+{
+  "name": "Orders — Order Created",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "orders/order-created",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a2o1-0001-oc-webhook",
+      "name": "Webhook: order.created",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "a2o1-oc-webhook-id"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "cond-event", "leftValue": "={{ $json.body.event }}", "rightValue": "order.created", "operator": { "type": "string", "operation": "equals" } }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2o1-0002-oc-filter",
+      "name": "Filter: order.created",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/orders/{{ $json.body.data.id }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2o1-0003-oc-fetch",
+      "name": "Fetch: Full Order",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.all()[0].json.data || $input.all()[0].json;\nreturn [{ json: { order: r, orderId: r.id, orderNumber: r.orderNumber, customerId: r.customerId, customerName: r.customer?.name || r.customer?.firstName, customerEmail: r.customer?.email, customerPhone: r.customer?.phone, distributorId: r.distributorId, tenantId: r.tenantId, total: r.total } }];"
+      },
+      "id": "a2o1-0004-oc-prep",
+      "name": "Code: Prep Order Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch-multi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channels\": [\"EMAIL\", \"WHATSAPP\"],\n  \"event\": \"order_confirmation\",\n  \"orderId\": \"{{ $json.orderId }}\",\n  \"tenantId\": \"{{ $json.tenantId }}\",\n  \"recipientEmail\": \"{{ $json.customerEmail }}\",\n  \"recipientPhone\": \"{{ $json.customerPhone }}\",\n  \"template\": \"order-confirmation\",\n  \"metadata\": { \"orderNumber\": \"{{ $json.orderNumber }}\", \"total\": {{ $json.total }}, \"workflow\": \"order-created\" }\n}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2o1-0005-oc-confirm",
+      "name": "Dispatch: Confirmation (Email + WhatsApp)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.distributorId }}",
+        "rules": { "rules": [ { "value2": "", "operation": "isNotEmpty", "outputKey": "assigned", "label": "Has Distributor" } ] },
+        "fallbackOutput": 1,
+        "options": {}
+      },
+      "id": "a2o1-0006-oc-switch-dist",
+      "name": "Switch: Has Distributor?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"MULTI\",\n  \"event\": \"order_assigned_to_distributor\",\n  \"orderId\": \"{{ $('Code: Prep Order Data').item.json.orderId }}\",\n  \"tenantId\": \"{{ $('Code: Prep Order Data').item.json.tenantId }}\",\n  \"distributorId\": \"{{ $('Code: Prep Order Data').item.json.distributorId }}\",\n  \"template\": \"distributor-order-assignment\",\n  \"metadata\": { \"orderNumber\": \"{{ $('Code: Prep Order Data').item.json.orderNumber }}\", \"customerName\": \"{{ $('Code: Prep Order Data').item.json.customerName }}\", \"total\": {{ $('Code: Prep Order Data').item.json.total }}, \"workflow\": \"order-created\" }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2o1-0007-oc-notify-dist",
+      "name": "Notify: Assigned Distributor",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, -60],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/ai/memory",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"type\": \"FACT\",\n  \"scope\": \"CUSTOMER\",\n  \"entityId\": \"{{ $('Code: Prep Order Data').item.json.customerId }}\",\n  \"tenantId\": \"{{ $('Code: Prep Order Data').item.json.tenantId }}\",\n  \"key\": \"recent_order\",\n  \"value\": \"Customer {{ $('Code: Prep Order Data').item.json.customerName }} placed order {{ $('Code: Prep Order Data').item.json.orderNumber }} for total ₹{{ $('Code: Prep Order Data').item.json.total }}\",\n  \"expiresAt\": null,\n  \"metadata\": { \"workflow\": \"order-created\", \"orderId\": \"{{ $('Code: Prep Order Data').item.json.orderId }}\" }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2o1-0008-oc-memory",
+      "name": "AI: Create Memory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 60],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/analytics/track",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"event\": \"order_created\",\n  \"entityType\": \"ORDER\",\n  \"entityId\": \"{{ $('Code: Prep Order Data').item.json.orderId }}\",\n  \"tenantId\": \"{{ $('Code: Prep Order Data').item.json.tenantId }}\",\n  \"value\": {{ $('Code: Prep Order Data').item.json.total }},\n  \"properties\": {\n    \"orderNumber\": \"{{ $('Code: Prep Order Data').item.json.orderNumber }}\",\n    \"customerId\": \"{{ $('Code: Prep Order Data').item.json.customerId }}\",\n    \"distributorId\": \"{{ $('Code: Prep Order Data').item.json.distributorId || null }}\",\n    \"workflow\": \"order-created\"\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2o1-0009-oc-analytics",
+      "name": "Update: Analytics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"SYSTEM\",\n  \"event\": \"order_created_workflow_completed\",\n  \"orderId\": \"{{ $('Code: Prep Order Data').item.json.orderId }}\",\n  \"status\": \"SUCCESS\",\n  \"tenantId\": \"{{ $('Code: Prep Order Data').item.json.tenantId }}\",\n  \"metadata\": { \"workflow\": \"order-created\", \"steps\": [\"confirmation_sent\", \"distributor_notified\", \"ai_memory_created\", \"analytics_tracked\"] }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2o1-0010-oc-audit",
+      "name": "Log: Audit Order Created",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Webhook: order.created": { "main": [ [ { "node": "Filter: order.created", "type": "main", "index": 0 } ] ] },
+    "Filter: order.created": { "main": [ [ { "node": "Fetch: Full Order", "type": "main", "index": 0 } ] ] },
+    "Fetch: Full Order": { "main": [ [ { "node": "Code: Prep Order Data", "type": "main", "index": 0 } ] ] },
+    "Code: Prep Order Data": { "main": [ [ { "node": "Dispatch: Confirmation (Email + WhatsApp)", "type": "main", "index": 0 } ] ] },
+    "Dispatch: Confirmation (Email + WhatsApp)": { "main": [ [ { "node": "Switch: Has Distributor?", "type": "main", "index": 0 } ] ] },
+    "Switch: Has Distributor?": {
+      "main": [
+        [ { "node": "Notify: Assigned Distributor", "type": "main", "index": 0 } ],
+        [ { "node": "AI: Create Memory", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Notify: Assigned Distributor": { "main": [ [ { "node": "Update: Analytics", "type": "main", "index": 0 } ] ] },
+    "AI: Create Memory": { "main": [ [ { "node": "Update: Analytics", "type": "main", "index": 0 } ] ] },
+    "Update: Analytics": { "main": [ [ { "node": "Log: Audit Order Created", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "orders" }, { "name": "analytics" }, { "name": "ai" }, { "name": "dayjoy" }]
+}

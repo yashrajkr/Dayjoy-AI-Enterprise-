@@ -1,0 +1,234 @@
+# ============================================
+# Dayjoy Voice AI — Production Docker Compose
+# ============================================
+#
+# Multi-container production stack:
+#   - voice-ai     (NestJS app, 2 replicas)
+#   - postgres     (pgvector/pgvector:pg15 — pgvector extension enabled)
+#   - redis        (redis:7-alpine with AOF persistence)
+#   - prometheus   (metrics scraping)
+#   - grafana      (dashboards)
+#
+# Usage:
+#   1. Copy `vapi-environment-config.env` to `.env` and fill in secrets.
+#   2. `docker compose -f vapi-docker-config.yml up -d`
+#   3. Verify: `curl http://localhost:3001/health/ready`
+#
+# For Kubernetes deployments, see `vapi-kubernetes-manifests.yml`.
+
+version: '3.9'
+
+services:
+  # ============================================
+  # Voice AI Application
+  # ============================================
+  voice-ai:
+    build:
+      context: ../..
+      dockerfile: vapi/deployment/Dockerfile
+    image: dayjoy/voice-ai:latest
+    container_name: dayjoy-voice-ai
+    restart: unless-stopped
+    env_file:
+      - vapi/deployment/vapi-environment-config.env
+    environment:
+      # Override the file-sourced DATABASE_URL + REDIS_URL with the
+      # service-container hostnames (since this compose file owns those
+      # services). Credentials come from the environment / .env file —
+      # never hardcode them here.
+      - DATABASE_URL=postgresql://dayjoy:${DATABASE_PASSWORD}@postgres:5432/dayjoy_ai
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - NODE_ENV=production
+      - PORT=3001
+    ports:
+      - "3001:3001"
+      - "9090:9090"  # metrics
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - dayjoy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ============================================
+  # PostgreSQL (with pgvector)
+  # ============================================
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: dayjoy-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dayjoy}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-dayjoy_ai}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d:ro  # optional: schema bootstrap
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-dayjoy} -d $${POSTGRES_DB:-dayjoy_ai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    networks:
+      - dayjoy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ============================================
+  # Redis (session memory + rate limiting)
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: dayjoy-redis
+    restart: unless-stopped
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+    networks:
+      - dayjoy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # ============================================
+  # Prometheus (metrics scraping)
+  # ============================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: dayjoy-prometheus
+    restart: unless-stopped
+    ports:
+      - "9091:9090"
+    volumes:
+      - ../../monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    networks:
+      - dayjoy-network
+    depends_on:
+      - voice-ai
+
+  # ============================================
+  # Grafana (dashboards)
+  # ============================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: dayjoy-grafana
+    restart: unless-stopped
+    ports:
+      - "3030:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:?GRAFANA_PASSWORD is required}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ../../monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ../../monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    networks:
+      - dayjoy-network
+    depends_on:
+      - prometheus
+
+  # ============================================
+  # Loki (log aggregation) — optional
+  # ============================================
+  loki:
+    image: grafana/loki:latest
+    container_name: dayjoy-loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - dayjoy-network
+
+# ============================================
+# Volumes
+# ============================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  loki_data:
+    driver: local
+
+# ============================================
+# Networks
+# ============================================
+networks:
+  dayjoy-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

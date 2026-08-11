@@ -1,0 +1,478 @@
+{
+  "name": "Leads — AI Scoring & Routing",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-scoring",
+        "responseMode": "responseNode",
+        "options": {
+          "rawData": true,
+          "binaryPropertyName": "data"
+        }
+      },
+      "id": "a1-lead-score-001",
+      "name": "Lead Scoring Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "e8a7c2d9-lead-scoring-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst headers = items[0].json.headers || {};\nconst secret = process.env.DAYJOY_WEBHOOK_SECRET;\nconst signature = headers['x-dayjoy-signature'];\nconst timestamp = headers['x-dayjoy-timestamp'];\nconst eventId = headers['x-dayjoy-event-id'];\nconst eventType = headers['x-dayjoy-event'];\nif (!signature || !timestamp || !eventId || !eventType) throw new Error('Missing required headers');\nif (Math.abs(Math.floor(Date.now()/1000) - parseInt(timestamp,10)) > 300) throw new Error('Stale timestamp');\nconst bodyBuffer = await this.helpers.getBinaryDataBuffer(items[0], 'data');\nconst expected = 'sha256=' + crypto.createHmac('sha256', secret).update(bodyBuffer).digest('hex');\nconst sigBuf = Buffer.from(signature), expBuf = Buffer.from(expected);\nif (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) throw new Error('Invalid signature');\nconst ALLOWED = ['lead.created', 'lead.updated', 'lead.interaction_logged'];\nif (!ALLOWED.includes(eventType)) throw new Error('Unexpected event: ' + eventType);\nconst payload = JSON.parse(bodyBuffer.toString('utf8'));\npayload._meta = { eventId, eventType, receivedAt: new Date().toISOString() };\nreturn [{ json: payload }];"
+      },
+      "id": "a1-lead-score-002",
+      "name": "Verify HMAC Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/automation/event-dedup",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_AUTOMATION_JWT }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"eventId\":\"{{ $json._meta.eventId }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-score-003",
+      "name": "Event Dedup Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads/{{ $json.leadId || $json.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-score-004",
+      "name": "Fetch Lead Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "GET /api/leads/:id — pull full lead context for scoring"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads/{{ $('Verify HMAC Signature').item.json.leadId || $('Verify HMAC Signature').item.json.id }}/interactions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-score-005",
+      "name": "Fetch Lead Interactions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "GET /api/leads/:id/interactions — emails, calls, WhatsApp, website visits"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build AI scoring prompt context\nconst lead = $('Fetch Lead Details').item.json.data || $('Fetch Lead Details').item.json;\nconst interactions = $('Fetch Lead Interactions').item.json.data || [];\n\n// Data completeness: 0-30 points\nconst fields = ['firstName','lastName','email','phone','company','territory','budget','timeline'];\nconst filled = fields.filter(f => lead[f] && String(lead[f]).trim()).length;\nconst completeness = Math.round((filled / fields.length) * 30);\n\n// Engagement: 0-40 points (each interaction = 5 pts, max 40)\nconst engagement = Math.min(40, interactions.length * 5);\n\n// Budget signal: 0-15\nconst budget = lead.budget ? 15 : 0;\n\n// Timeline urgency: 0-15 (urgent timeline = high score)\nconst timelineMap = { IMMEDIATE: 15, WEEKS: 10, MONTHS: 5, QUARTERS: 2 };\nconst timeline = timelineMap[lead.timeline] || 0;\n\nconst heuristicScore = Math.min(100, completeness + engagement + budget + timeline);\n\nreturn [{\n  json: {\n    leadId: lead.id,\n    lead,\n    interactions,\n    heuristicScore,\n    breakdown: { completeness, engagement, budget, timeline },\n    prompt: `Score this sales lead 0-100. Heuristic pre-score: ${heuristicScore}/100 (completeness=${completeness}, engagement=${engagement}, budget=${budget}, timeline=${timeline}). Return JSON {score:int, tier:'HOT'|'WARM'|'COLD', reason:string, recommendedAction:string}.`\n  }\n}];"
+      },
+      "id": "a1-lead-score-006",
+      "name": "Build AI Scoring Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300],
+      "notes": "Heuristic pre-score + AI prompt context. Heuristic = data completeness + engagement + budget + timeline."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/ai/conversations/lead-{{ $json.leadId }}/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"role\":\"system\",\"content\":\"{{ $json.prompt }}\",\"context\":{\"lead\":{{ JSON.stringify($json.lead) }},\"interactions\":{{ JSON.stringify($json.interactions) }},\"heuristicScore\":{{ $json.heuristicScore }},\"breakdown\":{{ JSON.stringify($json.breakdown) }}},\"responseFormat\":\"json\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-score-007",
+      "name": "AI Score Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/ai/conversations/:id/messages — AI scoring call"
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $json.body || $json;\nlet score = $('Build AI Scoring Context').item.json.heuristicScore;\nlet tier = 'WARM';\nlet reason = 'heuristic_fallback';\nlet recommendedAction = 'follow_up';\ntry {\n  let parsed = typeof resp === 'string' ? JSON.parse(resp) : resp;\n  if (parsed.data) parsed = parsed.data;\n  if (typeof parsed.score === 'number') score = parsed.score;\n  if (parsed.tier) tier = parsed.tier;\n  if (parsed.reason) reason = parsed.reason;\n  if (parsed.recommendedAction) recommendedAction = parsed.recommendedAction;\n} catch (e) { /* fall back to heuristic */ }\n\n// Override tier based on score buckets\nif (score > 80) tier = 'HOT';\nelse if (score >= 50) tier = 'WARM';\nelse tier = 'COLD';\n\nreturn [{\n  json: {\n    leadId: $('Build AI Scoring Context').item.json.leadId,\n    score,\n    tier,\n    reason,\n    recommendedAction,\n    breakdown: $('Build AI Scoring Context').item.json.breakdown,\n    scoredAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "a1-lead-score-008",
+      "name": "Parse Score & Tier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 300],
+      "notes": "Tier buckets: HOT>80, WARM 50-80, COLD<50"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads/{{ $json.leadId }}/score",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"score\":{{ $json.score }},\"tier\":\"{{ $json.tier }}\",\"scoreReason\":\"{{ $json.reason }}\",\"recommendedAction\":\"{{ $json.recommendedAction }}\",\"scoredAt\":\"{{ $json.scoredAt }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-score-009",
+      "name": "Update Lead Score",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "PATCH /api/leads/:id/score"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "value1": "={{ $json.tier }}",
+              "value2": "HOT",
+              "operation": "equal",
+              "outputKey": "hot"
+            },
+            {
+              "value1": "={{ $json.tier }}",
+              "value2": "WARM",
+              "operation": "equal",
+              "outputKey": "warm"
+            },
+            {
+              "value1": "={{ $json.tier }}",
+              "value2": "COLD",
+              "operation": "equal",
+              "outputKey": "cold"
+            }
+          ]
+        },
+        "fallbackOutput": 3
+      },
+      "id": "a1-lead-score-010",
+      "name": "Route by Tier",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [1980, 300],
+      "notes": "HOT>80 → immediate notify, WARM 50-80 → 2-day follow-up, COLD<50 → nurture"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads/{{ $json.leadId }}/status",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"status\":\"HOT\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-score-011",
+      "name": "Mark HOT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, 120],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"IN_APP\",\"recipient\":\"assigned_rep\",\"template\":\"HOT_LEAD_ALERT\",\"context\":{\"leadId\":\"{{ $json.leadId }}\",\"score\":{{ $json.score }},\"reason\":\"{{ $json.reason }}\",\"recommendedAction\":\"{{ $json.recommendedAction }}\"},\"priority\":\"URGENT\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-score-012",
+      "name": "Urgent Notify Rep (HOT)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2420, 120],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "URGENT priority in-app + push + SMS cascade for HOT leads"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads/{{ $json.leadId }}/tasks",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"type\":\"FOLLOW_UP_CALL\",\"title\":\"WARM lead follow-up\",\"dueAt\":\"{{ $today.plus({days:2}).toISO() }}\",\"priority\":\"MEDIUM\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-score-013",
+      "name": "Schedule WARM Follow-up (2d)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "WARM: schedule follow-up task for 2 days out"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads/{{ $json.leadId }}/nurture",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"campaign\":\"COLD_LEAD_NURTURE\",\"startDate\":\"{{ $today.toISODate() }}\",\"cadence\":\"weekly\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-score-014",
+      "name": "Add to Nurture Campaign (COLD)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, 480],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "COLD: enroll in weekly nurture email campaign"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true,\"eventId\":\"{{ $('Verify HMAC Signature').item.json._meta.eventId }}\",\"leadId\":\"{{ $json.leadId }}\",\"score\":{{ $json.score }},\"tier\":\"{{ $json.tier }}\"}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "a1-lead-score-015",
+      "name": "Respond 200 Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2640, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"error\":\"invalid_signature\"}",
+        "options": { "responseCode": 401 }
+      },
+      "id": "a1-lead-score-016",
+      "name": "Respond 401 Auth",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [220, 540]
+    }
+  ],
+  "connections": {
+    "Lead Scoring Webhook": {
+      "main": [
+        [
+          { "node": "Verify HMAC Signature", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Verify HMAC Signature": {
+      "main": [
+        [
+          { "node": "Event Dedup Check", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Event Dedup Check": {
+      "main": [
+        [
+          { "node": "Fetch Lead Details", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Lead Details": {
+      "main": [
+        [
+          { "node": "Fetch Lead Interactions", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Lead Interactions": {
+      "main": [
+        [
+          { "node": "Build AI Scoring Context", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build AI Scoring Context": {
+      "main": [
+        [
+          { "node": "AI Score Lead", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "AI Score Lead": {
+      "main": [
+        [
+          { "node": "Parse Score & Tier", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Score & Tier": {
+      "main": [
+        [
+          { "node": "Update Lead Score", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Update Lead Score": {
+      "main": [
+        [
+          { "node": "Route by Tier", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Route by Tier": {
+      "main": [
+        [
+          { "node": "Mark HOT", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Schedule WARM Follow-up (2d)", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Add to Nurture Campaign (COLD)", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Respond 200 Success", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Mark HOT": {
+      "main": [
+        [
+          { "node": "Urgent Notify Rep (HOT)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Urgent Notify Rep (HOT)": {
+      "main": [
+        [
+          { "node": "Respond 200 Success", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Schedule WARM Follow-up (2d)": {
+      "main": [
+        [
+          { "node": "Respond 200 Success", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Add to Nurture Campaign (COLD)": {
+      "main": [
+        [
+          { "node": "Respond 200 Success", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "tags": [
+    { "name": "leads" },
+    { "name": "ai" },
+    { "name": "agent-a1" }
+  ],
+  "meta": {
+    "templateCreatedBy": "Agent A1 — CRM/Sales/Leads",
+    "description": "AI-powered lead scoring. Trigger: lead created/updated/interaction logged. Computes heuristic pre-score (completeness+engagement+budget+timeline), calls AI for refinement, then routes: HOT(>80)→URGENT notify, WARM(50-80)→follow-up in 2 days, COLD(<50)→nurture campaign."
+  }
+}

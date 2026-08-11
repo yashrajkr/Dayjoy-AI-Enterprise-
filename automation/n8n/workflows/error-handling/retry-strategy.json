@@ -1,0 +1,442 @@
+{
+  "name": "Dayjoy — Retry Strategy (Reusable Sub-Workflow)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "3c4d5e6f-0001-4000-8000-000000000001",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0],
+      "notes": "Called by other workflows with: { operation: { workflow_id, payload }, error: { message, code, stack, http_status }, context: { source_execution_id, attempt } }. Returns { action, attempts_made, final_status, last_error }."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Classify the error into a retry-strategy bucket.\n// Strategies:\n//   - network      -> retry 3x, exponential backoff (1s, 2s, 4s)\n//   - rate_limit   -> retry once after 60s fixed delay\n//   - validation   -> DO NOT retry (route to DLQ)\n//   - auth         -> refresh token then retry once\n//   - server_error -> retry 2x with 10s backoff\n//   - unknown      -> do not retry (route to DLQ)\n\nconst e = $json.error || {};\nconst msg = (e.message || '').toLowerCase();\nconst code = (e.code || '').toString().toLowerCase();\nconst status = Number(e.http_status) || 0;\nconst combined = `${msg} ${code} ${status}`;\n\nlet strategy = 'dlq';\nlet max_attempts = 0;\nlet backoff_ms = 0;\nlet backoff_pattern = [];\nlet description = 'No retry — route to dead-letter queue.';\n\nif (\n  combined.includes('etimedout') ||\n  combined.includes('econnreset') ||\n  combined.includes('econnrefused') ||\n  combined.includes('enotfound') ||\n  combined.includes('socket hang up') ||\n  combined.includes('timeout') ||\n  combined.includes('network')\n) {\n  strategy = 'network';\n  max_attempts = 3;\n  backoff_pattern = [1000, 2000, 4000];\n  backoff_ms = 1000;\n  description = 'Network error — exponential backoff (1s, 2s, 4s), up to 3 attempts.';\n} else if (status === 429 || combined.includes('rate limit') || combined.includes('too many requests')) {\n  strategy = 'rate_limit';\n  max_attempts = 1;\n  backoff_pattern = [60000];\n  backoff_ms = 60000;\n  description = 'Rate limited — single retry after 60s fixed delay.';\n} else if (\n  combined.includes('validation') ||\n  combined.includes('schema') ||\n  combined.includes('required field') ||\n  combined.includes('invalid input') ||\n  status === 400 ||\n  status === 422\n) {\n  strategy = 'dlq';\n  max_attempts = 0;\n  description = 'Validation error — will NOT retry. Routing to dead-letter queue.';\n} else if (\n  status === 401 ||\n  status === 403 ||\n  combined.includes('unauthorized') ||\n  combined.includes('forbidden') ||\n  combined.includes('token expired') ||\n  combined.includes('invalid_grant')\n) {\n  strategy = 'auth';\n  max_attempts = 1;\n  backoff_pattern = [2000];\n  backoff_ms = 2000;\n  description = 'Auth error — refresh token, then a single retry.';\n} else if (status >= 500 || combined.includes('internal server error') || combined.includes('bad gateway')) {\n  strategy = 'server_error';\n  max_attempts = 2;\n  backoff_pattern = [10000, 10000];\n  backoff_ms = 10000;\n  description = 'Server error — 2 retries with 10s fixed backoff.';\n}\n\nreturn {\n  json: {\n    ...$json,\n    retry_strategy: strategy,\n    max_attempts,\n    backoff_ms,\n    backoff_pattern,\n    description,\n    classified_at: new Date().toISOString()\n  }\n};\n"
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000002",
+      "name": "Classify Error Type",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  { "id": "c-network", "leftValue": "={{ $json.retry_strategy }}", "rightValue": "network", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": "network"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  { "id": "c-rate-limit", "leftValue": "={{ $json.retry_strategy }}", "rightValue": "rate_limit", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": "rate_limit"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  { "id": "c-validation", "leftValue": "={{ $json.retry_strategy }}", "rightValue": "dlq", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": "validation_dlq"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  { "id": "c-auth", "leftValue": "={{ $json.retry_strategy }}", "rightValue": "auth", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": "auth"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  { "id": "c-server", "leftValue": "={{ $json.retry_strategy }}", "rightValue": "server_error", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": "server_error"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000003",
+      "name": "Route by Strategy",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [480, 0]
+    },
+    {
+      "parameters": {
+        "amount": 1,
+        "unit": "seconds"
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000004",
+      "name": "Wait 1s (attempt 1)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [760, -500],
+      "notes": "Exponential backoff slot 1 (1s)."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/replay-workflow",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow_id\": $json.operation.workflow_id,\n  \"original_payload\": $json.operation.payload,\n  \"attempt\": 1,\n  \"reason\": \"network_retry_1\",\n  \"source_execution_id\": $json.context.source_execution_id\n}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000005",
+      "name": "Retry 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [960, -500]
+    },
+    {
+      "parameters": { "amount": 2, "unit": "seconds" },
+      "id": "3c4d5e6f-0001-4000-8000-000000000006",
+      "name": "Wait 2s (attempt 2)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1160, -500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/replay-workflow",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow_id\": $json.operation.workflow_id,\n  \"original_payload\": $json.operation.payload,\n  \"attempt\": 2,\n  \"reason\": \"network_retry_2\",\n  \"source_execution_id\": $json.context.source_execution_id\n}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000007",
+      "name": "Retry 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1360, -500]
+    },
+    {
+      "parameters": { "amount": 4, "unit": "seconds" },
+      "id": "3c4d5e6f-0001-4000-8000-000000000008",
+      "name": "Wait 4s (attempt 3)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1560, -500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/replay-workflow",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow_id\": $json.operation.workflow_id,\n  \"original_payload\": $json.operation.payload,\n  \"attempt\": 3,\n  \"reason\": \"network_retry_3\",\n  \"source_execution_id\": $json.context.source_execution_id\n}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000009",
+      "name": "Retry 3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, -500]
+    },
+    {
+      "parameters": {
+        "jsCode": "return { json: { action: 'retried_network', attempts_made: 3, final_status: 'replayed', retry_strategy: 'network' } };"
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000010",
+      "name": "Return Network Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1960, -500]
+    },
+    {
+      "parameters": { "amount": 60, "unit": "seconds" },
+      "id": "3c4d5e6f-0001-4000-8000-000000000011",
+      "name": "Wait 60s (rate limit)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [760, -250],
+      "notes": "Single retry after the 60s rate-limit cooldown."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/replay-workflow",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow_id\": $json.operation.workflow_id,\n  \"original_payload\": $json.operation.payload,\n  \"attempt\": 1,\n  \"reason\": \"rate_limit_retry\",\n  \"source_execution_id\": $json.context.source_execution_id\n}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000012",
+      "name": "Retry After Rate Limit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [960, -250]
+    },
+    {
+      "parameters": {
+        "jsCode": "return { json: { action: 'retried_rate_limit', attempts_made: 1, final_status: 'replayed', retry_strategy: 'rate_limit' } };"
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000013",
+      "name": "Return Rate-Limit Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1160, -250]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/dead-letter-queue",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow_id\": $json.operation.workflow_id,\n  \"workflow_name\": $json.operation.workflow_name || null,\n  \"payload\": $json.operation.payload,\n  \"error_message\": $json.error.message,\n  \"error_code\": $json.error.code,\n  \"error_stack\": $json.error.stack,\n  \"category\": \"validation\",\n  \"source_execution_id\": $json.context.source_execution_id,\n  \"attempt_count\": $json.context.attempt || 1,\n  \"status\": \"pending\",\n  \"created_at\": new Date().toISOString()\n}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000014",
+      "name": "Send to DLQ",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 0],
+      "notes": "Validation/unknown errors are routed to the DLQ for human review (no retry attempted)."
+    },
+    {
+      "parameters": {
+        "jsCode": "return { json: { action: 'sent_to_dlq', attempts_made: 0, final_status: 'dead_lettered', retry_strategy: 'dlq' } };"
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000015",
+      "name": "Return DLQ Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/refresh-credential",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow_id\": $json.operation.workflow_id,\n  \"node_name\": $json.error.node_name || null,\n  \"reason\": \"auth_retry_refresh\"\n}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000016",
+      "name": "Refresh Token",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 250],
+      "notes": "Asks the backend to rotate/refresh the OAuth2 token used by the failing workflow before retrying."
+    },
+    {
+      "parameters": { "amount": 2, "unit": "seconds" },
+      "id": "3c4d5e6f-0001-4000-8000-000000000017",
+      "name": "Wait 2s (auth cooldown)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1000, 250]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/replay-workflow",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow_id\": $json.operation.workflow_id,\n  \"original_payload\": $json.operation.payload,\n  \"attempt\": 1,\n  \"reason\": \"auth_retry_after_refresh\",\n  \"source_execution_id\": $json.context.source_execution_id\n}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000018",
+      "name": "Retry Once (Auth)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 250]
+    },
+    {
+      "parameters": {
+        "jsCode": "return { json: { action: 'retried_auth', attempts_made: 1, final_status: 'replayed', retry_strategy: 'auth' } };"
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000019",
+      "name": "Return Auth Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 250]
+    },
+    {
+      "parameters": { "amount": 10, "unit": "seconds" },
+      "id": "3c4d5e6f-0001-4000-8000-000000000020",
+      "name": "Wait 10s (server err 1)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [760, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/replay-workflow",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow_id\": $json.operation.workflow_id,\n  \"original_payload\": $json.operation.payload,\n  \"attempt\": 1,\n  \"reason\": \"server_error_retry_1\",\n  \"source_execution_id\": $json.context.source_execution_id\n}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000021",
+      "name": "Retry 1 (server err)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [960, 500]
+    },
+    {
+      "parameters": { "amount": 10, "unit": "seconds" },
+      "id": "3c4d5e6f-0001-4000-8000-000000000022",
+      "name": "Wait 10s (server err 2)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1160, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/replay-workflow",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow_id\": $json.operation.workflow_id,\n  \"original_payload\": $json.operation.payload,\n  \"attempt\": 2,\n  \"reason\": \"server_error_retry_2\",\n  \"source_execution_id\": $json.context.source_execution_id\n}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000023",
+      "name": "Retry 2 (server err)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1360, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "return { json: { action: 'retried_server_error', attempts_made: 2, final_status: 'replayed', retry_strategy: 'server_error' } };"
+      },
+      "id": "3c4d5e6f-0001-4000-8000-000000000024",
+      "name": "Return Server-Err Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 500]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": { "main": [ [{ "node": "Classify Error Type", "type": "main", "index": 0 }] ] },
+    "Classify Error Type": { "main": [ [{ "node": "Route by Strategy", "type": "main", "index": 0 }] ] },
+    "Route by Strategy": {
+      "main": [
+        [ { "node": "Wait 1s (attempt 1)", "type": "main", "index": 0 } ],
+        [ { "node": "Wait 60s (rate limit)", "type": "main", "index": 0 } ],
+        [ { "node": "Send to DLQ", "type": "main", "index": 0 } ],
+        [ { "node": "Refresh Token", "type": "main", "index": 0 } ],
+        [ { "node": "Wait 10s (server err 1)", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Wait 1s (attempt 1)": { "main": [ [{ "node": "Retry 1", "type": "main", "index": 0 }] ] },
+    "Retry 1": { "main": [ [{ "node": "Wait 2s (attempt 2)", "type": "main", "index": 0 }] ] },
+    "Wait 2s (attempt 2)": { "main": [ [{ "node": "Retry 2", "type": "main", "index": 0 }] ] },
+    "Retry 2": { "main": [ [{ "node": "Wait 4s (attempt 3)", "type": "main", "index": 0 }] ] },
+    "Wait 4s (attempt 3)": { "main": [ [{ "node": "Retry 3", "type": "main", "index": 0 }] ] },
+    "Retry 3": { "main": [ [{ "node": "Return Network Result", "type": "main", "index": 0 }] ] },
+    "Wait 60s (rate limit)": { "main": [ [{ "node": "Retry After Rate Limit", "type": "main", "index": 0 }] ] },
+    "Retry After Rate Limit": { "main": [ [{ "node": "Return Rate-Limit Result", "type": "main", "index": 0 }] ] },
+    "Send to DLQ": { "main": [ [{ "node": "Return DLQ Result", "type": "main", "index": 0 }] ] },
+    "Refresh Token": { "main": [ [{ "node": "Wait 2s (auth cooldown)", "type": "main", "index": 0 }] ] },
+    "Wait 2s (auth cooldown)": { "main": [ [{ "node": "Retry Once (Auth)", "type": "main", "index": 0 }] ] },
+    "Retry Once (Auth)": { "main": [ [{ "node": "Return Auth Result", "type": "main", "index": 0 }] ] },
+    "Wait 10s (server err 1)": { "main": [ [{ "node": "Retry 1 (server err)", "type": "main", "index": 0 }] ] },
+    "Retry 1 (server err)": { "main": [ [{ "node": "Wait 10s (server err 2)", "type": "main", "index": 0 }] ] },
+    "Wait 10s (server err 2)": { "main": [ [{ "node": "Retry 2 (server err)", "type": "main", "index": 0 }] ] },
+    "Retry 2 (server err)": { "main": [ [{ "node": "Return Server-Err Result", "type": "main", "index": 0 }] ] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "callerPolicy": "any"
+  },
+  "active": true,
+  "tags": [{ "name": "error-handling" }, { "name": "retry" }, { "name": "reusable" }],
+  "meta": {
+    "templateCreatedBy": "Dayjoy Platform Team",
+    "description": "Reusable sub-workflow. Callers pass { operation: { workflow_id, payload }, error: { message, code, http_status, stack, node_name }, context: { source_execution_id, attempt } }. Classifies the error and applies the right strategy: network=3x exponential backoff (1s/2s/4s); rate_limit=1x after 60s; validation=DLQ no retry; auth=refresh token + 1 retry; server_error=2x with 10s backoff. Returns { action, attempts_made, final_status, retry_strategy }.",
+    "version": "1.0.0"
+  }
+}

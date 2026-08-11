@@ -1,0 +1,294 @@
+{
+  "name": "Dayjoy — Dead-Letter Queue Processor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 5 }] }
+      },
+      "id": "2b3c4d5e-0001-4000-8000-000000000001",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "notes": "Drains the dead-letter queue every 5 minutes. DLQ rows are written by the global error handler when an operation exhausts its retry budget."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/dead-letter-queue?status=pending&limit=50",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "X-Source", "value": "n8n-dlq-processor" }
+          ]
+        },
+        "options": { "timeout": 15000, "pagination": { "pagination": { "mode": "off" } } }
+      },
+      "id": "2b3c4d5e-0001-4000-8000-000000000002",
+      "name": "Fetch Pending DLQ Items",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 0],
+      "notes": "Pulls up to 50 pending items from the DLQ. Items include original payload, target workflow, error, and attempt count."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            { "id": "cond-has-items", "leftValue": "={{ $json.items.length }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2b3c4d5e-0001-4000-8000-000000000003",
+      "name": "Items to Process?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 0]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "items",
+        "options": {}
+      },
+      "id": "2b3c4d5e-0001-4000-8000-000000000004",
+      "name": "Split Into Items",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [680, -100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Enforce the max-attempts cap. Total allowed attempts = 3.\n// attempts includes the original execution, so max retries = 2.\nconst MAX_ATTEMPTS = 3;\nconst currentAttempt = $json.attempt_count || 1;\nconst canRetry = currentAttempt < MAX_ATTEMPTS;\n\nreturn {\n  json: {\n    ...$json,\n    can_retry: canRetry,\n    remaining_attempts: Math.max(0, MAX_ATTEMPTS - currentAttempt),\n    max_attempts: MAX_ATTEMPTS,\n    processed_at: new Date().toISOString()\n  }\n};\n"
+      },
+      "id": "2b3c4d5e-0001-4000-8000-000000000005",
+      "name": "Check Attempt Budget",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, -100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            { "id": "cond-can-retry", "leftValue": "={{ $json.can_retry }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2b3c4d5e-0001-4000-8000-000000000006",
+      "name": "Can Retry?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, -100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/replay-workflow",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"dlq_id\": $json.id,\n  \"workflow_id\": $json.workflow_id,\n  \"original_payload\": $json.payload,\n  \"attempt\": $json.attempt_count + 1,\n  \"reason\": \"dlq_retry\",\n  \"source_execution_id\": $json.source_execution_id\n}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "2b3c4d5e-0001-4000-8000-000000000007",
+      "name": "Replay Workflow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1360, -200],
+      "notes": "Re-submits the original payload to the failed workflow. Backend increments attempt_count and either clears the DLQ row on success or leaves it pending for the next pass."
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/dead-letter-queue/{{ $json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"retried\",\n  \"last_attempt_at\": new Date().toISOString(),\n  \"attempt_count\": $json.attempt_count + 1,\n  \"last_replay_id\": $json.id\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "2b3c4d5e-0001-4000-8000-000000000008",
+      "name": "Mark Retried",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1600, -200]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/dead-letter-queue/{{ $json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"archived\",\n  \"archived_at\": new Date().toISOString(),\n  \"archive_reason\": \"max_attempts_exceeded\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "2b3c4d5e-0001-4000-8000-000000000009",
+      "name": "Archive (Max Attempts)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1360, 0],
+      "notes": "Permanently archives the DLQ row so it won't be retried again. Archived items are retained for 90 days for forensic analysis."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"#ops-alerts\",\n  \"text\": \":archive: *DLQ item archived after max retries*\\n• DLQ ID: {{ $json.id }}\\n• Workflow: `{{ $json.workflow_name || $json.workflow_id }}`\\n• Original error: {{ $json.error_message }}\\n• Attempts: {{ $json.attempt_count }} / {{ $json.max_attempts }}\\n• Payload summary: {{ JSON.stringify($json.payload).substring(0, 300) }}...\\n• Archived at: {{ new Date().toISOString() }}\\n• Needs manual intervention: {{ $env.DAYJOY_API_URL }}/admin/n8n/dlq/{{ $json.id }}\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "2b3c4d5e-0001-4000-8000-000000000010",
+      "name": "Alert on Archive",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1600, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://events.pagerduty.com/v2/enqueue",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"routing_key\": \"{{ $env.PAGERDUTY_INTEGRATION_KEY }}\",\n  \"event_action\": \"trigger\",\n  \"dedup_key\": \"n8n-dlq-archive-{{ $json.id }}\",\n  \"payload\": {\n    \"summary\": \"n8n DLQ item archived — manual intervention required (workflow {{ $json.workflow_id }})\",\n    \"severity\": \"error\",\n    \"source\": \"n8n:dlq-processor\",\n    \"custom_details\": {\n      \"dlq_id\": $json.id,\n      \"workflow_id\": $json.workflow_id,\n      \"error_message\": $json.error_message,\n      \"attempts\": $json.attempt_count\n    }\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "2b3c4d5e-0001-4000-8000-000000000011",
+      "name": "Page On-Call (Archive)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1820, 0],
+      "notes": "Pages on-call when a DLQ item is archived so someone investigates within the next business hour."
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 9 * * *" }] }
+      },
+      "id": "2b3c4d5e-0001-4000-8000-000000000012",
+      "name": "Daily at 09:00 IST",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 400],
+      "notes": "Generates the daily DLQ failure report at 09:00 IST every day."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/dead-letter-queue/report?period=24h",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      },
+      "id": "2b3c4d5e-0001-4000-8000-000000000013",
+      "name": "Fetch 24h DLQ Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"#ops-alerts\",\n  \"text\": \":bar_chart: *Daily DLQ Failure Report (24h)*\\n• New items: {{ $json.new_count || 0 }}\\n• Retried: {{ $json.retried_count || 0 }}\\n• Recovered on retry: {{ $json.recovered_count || 0 }}\\n• Archived (unrecoverable): {{ $json.archived_count || 0 }}\\n• Top failing workflows: {{ ($json.top_workflows || []).map(w => '`' + w.workflow_name + '` (' + w.count + ')').join(', ') || 'none' }}\\n• Top error categories: {{ ($json.top_categories || []).map(c => c.category + ' (' + c.count + ')').join(', ') || 'none' }}\\n• Full report: {{ $env.DAYJOY_API_URL }}/admin/n8n/dlq/report?period=24h\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "2b3c4d5e-0001-4000-8000-000000000014",
+      "name": "Post Daily Report (Slack)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/notifications/email",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"to\": [\"ops-team@dayjoy.ai\", \"data-team@dayjoy.ai\"],\n  \"subject\": \"[Dayjoy n8n] Daily DLQ Report — {{ ($json.archived_count || 0) }} archived\",\n  \"template\": \"dlq-daily-report\",\n  \"context\": $json\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "2b3c4d5e-0001-4000-8000-000000000015",
+      "name": "Email Report to Ops + Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 400]
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": { "main": [ [{ "node": "Fetch Pending DLQ Items", "type": "main", "index": 0 }] ] },
+    "Fetch Pending DLQ Items": { "main": [ [{ "node": "Items to Process?", "type": "main", "index": 0 }] ] },
+    "Items to Process?": {
+      "main": [
+        [ { "node": "Split Into Items", "type": "main", "index": 0 } ],
+        []
+      ]
+    },
+    "Split Into Items": { "main": [ [{ "node": "Check Attempt Budget", "type": "main", "index": 0 }] ] },
+    "Check Attempt Budget": { "main": [ [{ "node": "Can Retry?", "type": "main", "index": 0 }] ] },
+    "Can Retry?": {
+      "main": [
+        [ { "node": "Replay Workflow", "type": "main", "index": 0 } ],
+        [ { "node": "Archive (Max Attempts)", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Replay Workflow": { "main": [ [{ "node": "Mark Retried", "type": "main", "index": 0 }] ] },
+    "Archive (Max Attempts)": { "main": [ [{ "node": "Alert on Archive", "type": "main", "index": 0 } ] ] },
+    "Alert on Archive": { "main": [ [{ "node": "Page On-Call (Archive)", "type": "main", "index": 0 }] ] },
+    "Daily at 09:00 IST": { "main": [ [{ "node": "Fetch 24h DLQ Report", "type": "main", "index": 0 }] ] },
+    "Fetch 24h DLQ Report": { "main": [ [{ "node": "Post Daily Report (Slack)", "type": "main", "index": 0 }] ] },
+    "Post Daily Report (Slack)": { "main": [ [{ "node": "Email Report to Ops + Data", "type": "main", "index": 0 }] ] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": true,
+  "tags": [{ "name": "error-handling" }, { "name": "dlq" }, { "name": "production" }],
+  "meta": {
+    "templateCreatedBy": "Dayjoy Platform Team",
+    "description": "Drains the dead-letter queue every 5 minutes. Each item gets up to 3 total attempts (1 original + 2 retries). Items that still fail are archived and the on-call engineer is paged. A daily 09:00 IST report summarizes the last 24h of DLQ activity to Slack and email.",
+    "version": "1.0.0"
+  }
+}

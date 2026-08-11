@@ -1,0 +1,153 @@
+{
+  "name": "Notifications — Admin Broadcast",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "notifications/broadcast",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a2n4-0001-bcast-webhook",
+      "name": "Webhook: Manual Admin Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "a2n4-bcast-webhook-id"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.all()[0].json.body;\nconst valid = ['ALL_CUSTOMERS', 'ALL_DISTRIBUTORS', 'ALL_EMPLOYEES', 'SEGMENT'].includes(b.audience);\nif (!valid) return [{ json: { skip: true, reason: 'Invalid audience' } }];\nconst validChannels = ['EMAIL', 'WHATSAPP', 'PUSH', 'IN_APP'].filter(c => (b.channels || []).includes(c));\nif (validChannels.length === 0) return [{ json: { skip: true, reason: 'No valid channels' } }];\nreturn [{\n  json: {\n    skip: false,\n    audience: b.audience,\n    segment: b.segment || null,\n    channels: validChannels,\n    template: b.template,\n    title: b.title,\n    body: b.body,\n    data: b.data || {},\n    initiatedBy: b.initiatedBy,\n    tenantId: b.tenantId,\n    broadcastId: b.broadcastId || `bcast_${Date.now()}`\n  }\n}];"
+      },
+      "id": "a2n4-0002-bcast-validate",
+      "name": "Code: Validate Broadcast",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.skip }}",
+        "rules": { "rules": [ { "value2": "false", "outputKey": "go", "label": "Process Broadcast" } ] },
+        "fallbackOutput": 1,
+        "options": {}
+      },
+      "id": "a2n4-0003-bcast-switch",
+      "name": "Switch: Process or Skip",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/audiences/resolve",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"audience\": \"{{ $json.audience }}\",\n  \"segment\": {{ $json.segment ? JSON.stringify($json.segment) : 'null' }},\n  \"tenantId\": \"{{ $json.tenantId }}\",\n  \"include\": [\"email\", \"phone\", \"deviceToken\", \"userId\", \"name\"]\n}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "a2n4-0004-bcast-resolve",
+      "name": "Fetch: Resolve Audience",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "id": "a2n4-0005-bcast-split-recipients",
+      "name": "Split: Per Recipient",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.all()[0].json;\nconst ctx = $('Code: Validate Broadcast').item.json;\n// Expand each recipient to one item per channel\nreturn ctx.channels.map(ch => ({\n  json: {\n    channel: ch,\n    broadcastId: ctx.broadcastId,\n    template: ctx.template,\n    title: ctx.title,\n    body: ctx.body,\n    data: ctx.data,\n    tenantId: ctx.tenantId,\n    initiatedBy: ctx.initiatedBy,\n    recipientName: r.name,\n    recipientEmail: r.email,\n    recipientPhone: r.phone,\n    recipientDeviceToken: r.deviceToken,\n    recipientUserId: r.userId\n  }\n}));"
+      },
+      "id": "a2n4-0006-bcast-expand",
+      "name": "Code: Expand Per Channel",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{ $json.channel }}\",\n  \"event\": \"admin_broadcast\",\n  \"broadcastId\": \"{{ $json.broadcastId }}\",\n  \"tenantId\": \"{{ $json.tenantId }}\",\n  \"userId\": \"{{ $json.recipientUserId }}\",\n  \"recipientEmail\": \"{{ $json.recipientEmail }}\",\n  \"recipientPhone\": \"{{ $json.recipientPhone }}\",\n  \"deviceToken\": \"{{ $json.recipientDeviceToken }}\",\n  \"title\": \"{{ $json.title }}\",\n  \"body\": \"{{ $json.body }}\",\n  \"template\": \"{{ $json.template }}\",\n  \"data\": {{ JSON.stringify($json.data || {}) }},\n  \"metadata\": { \"workflow\": \"broadcast\", \"initiatedBy\": \"{{ $json.initiatedBy }}\" }\n}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2n4-0007-bcast-dispatch",
+      "name": "Dispatch: Broadcast Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/broadcast/{{ $('Code: Validate Broadcast').item.json.broadcastId }}/delivery",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{ $json.channel }}\",\n  \"recipientUserId\": \"{{ $json.recipientUserId }}\",\n  \"recipientEmail\": \"{{ $json.recipientEmail }}\",\n  \"recipientPhone\": \"{{ $json.recipientPhone }}\",\n  \"status\": \"{{ $json.status || 'SENT' }}\",\n  \"messageId\": \"{{ $json.id || $json.messageId || '' }}\",\n  \"sentAt\": \"{{ $now.toISO() }}\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2n4-0008-bcast-track",
+      "name": "Track: Delivery Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{ $json.channel }}\",\n  \"event\": \"admin_broadcast_completed\",\n  \"broadcastId\": \"{{ $('Code: Validate Broadcast').item.json.broadcastId }}\",\n  \"status\": \"SUCCESS\",\n  \"tenantId\": \"{{ $('Code: Validate Broadcast').item.json.tenantId }}\",\n  \"metadata\": {\n    \"workflow\": \"broadcast\",\n    \"audience\": \"{{ $('Code: Validate Broadcast').item.json.audience }}\",\n    \"channels\": {{ JSON.stringify($('Code: Validate Broadcast').item.json.channels) }},\n    \"initiatedBy\": \"{{ $('Code: Validate Broadcast').item.json.initiatedBy }}\"\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2n4-0009-bcast-audit",
+      "name": "Log: Audit Broadcast",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Webhook: Manual Admin Trigger": { "main": [ [ { "node": "Code: Validate Broadcast", "type": "main", "index": 0 } ] ] },
+    "Code: Validate Broadcast": { "main": [ [ { "node": "Switch: Process or Skip", "type": "main", "index": 0 } ] ] },
+    "Switch: Process or Skip": { "main": [ [ { "node": "Fetch: Resolve Audience", "type": "main", "index": 0 } ] ] },
+    "Fetch: Resolve Audience": { "main": [ [ { "node": "Split: Per Recipient", "type": "main", "index": 0 } ] ] },
+    "Split: Per Recipient": { "main": [ [ { "node": "Code: Expand Per Channel", "type": "main", "index": 0 } ] ] },
+    "Code: Expand Per Channel": { "main": [ [ { "node": "Dispatch: Broadcast Message", "type": "main", "index": 0 } ] ] },
+    "Dispatch: Broadcast Message": { "main": [ [ { "node": "Track: Delivery Record", "type": "main", "index": 0 } ] ] },
+    "Track: Delivery Record": { "main": [ [ { "node": "Log: Audit Broadcast", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "notifications" }, { "name": "broadcast" }, { "name": "admin" }, { "name": "dayjoy" }]
+}

@@ -1,0 +1,233 @@
+{
+  "name": "Dayjoy — Health Check",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 1 }] }
+      },
+      "id": "6f7a8b9c-0001-4000-8000-000000000001",
+      "name": "Every 1 Minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "notes": "Probes all four critical services every minute. Any non-200 response (or timeout) immediately alerts the on-call engineer."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:5678/healthz",
+        "options": { "timeout": 5000, "response": { "response": { "fullResponse": true } } }
+      },
+      "id": "6f7a8b9c-0001-4000-8000-000000000002",
+      "name": "Probe n8n",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, -300],
+      "notes": "n8n's own /healthz endpoint. Returns 200 OK when the instance is ready to serve requests."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/health",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "n8n-healthcheck/1.0" }
+          ]
+        },
+        "options": { "timeout": 5000, "response": { "response": { "fullResponse": true } } }
+      },
+      "id": "6f7a8b9c-0001-4000-8000-000000000003",
+      "name": "Probe Backend API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, -100],
+      "notes": "FastAPI backend liveness probe. Returns 200 + JSON { status: 'ok', db: true, redis: true } when all subsystems are healthy."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/health/db",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" }
+          ]
+        },
+        "options": { "timeout": 5000, "response": { "response": { "fullResponse": true } } }
+      },
+      "id": "6f7a8b9c-0001-4000-8000-000000000004",
+      "name": "Probe Database",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 100],
+      "notes": "Backend endpoint that runs SELECT 1 against PostgreSQL. Returns 200 + { ok: true, latency_ms: <n> }."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/health/redis",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" }
+          ]
+        },
+        "options": { "timeout": 5000, "response": { "response": { "fullResponse": true } } }
+      },
+      "id": "6f7a8b9c-0001-4000-8000-000000000005",
+      "name": "Probe Redis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 300],
+      "notes": "Backend endpoint that runs PING against Redis. Returns 200 + { ok: true, latency_ms: <n> }."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reduce the four probe responses into a single health snapshot.\n// Each probe returns either a healthy status or an error string.\nfunction probe(name, items) {\n  const it = items.all[0];\n  if (!it) return { service: name, healthy: false, status_code: null, latency_ms: null, error: 'no_response' };\n  const j = it.json || {};\n  const code = j.statusCode || j.status || null;\n  const latency = j.headers?.['x-response-time'] ? parseInt(j.headers['x-response-time'], 10) : null;\n  const healthy = code !== null && code >= 200 && code < 300;\n  return {\n    service: name,\n    healthy,\n    status_code: code,\n    latency_ms: latency,\n    error: healthy ? null : (j.body?.error || j.message || `http_${code}`)\n  };\n}\n\nconst probes = [\n  probe('n8n', $items('Probe n8n')),\n  probe('backend_api', $items('Probe Backend API')),\n  probe('database', $items('Probe Database')),\n  probe('redis', $items('Probe Redis'))\n];\n\nconst unhealthy = probes.filter(p => !p.healthy);\nconst allHealthy = unhealthy.length === 0;\n\nreturn {\n  json: {\n    checked_at: new Date().toISOString(),\n    overall: allHealthy ? 'healthy' : 'unhealthy',\n    probes,\n    unhealthy_count: unhealthy.length,\n    unhealthy_services: unhealthy.map(p => p.service)\n  }\n};\n"
+      },
+      "id": "6f7a8b9c-0001-4000-8000-000000000006",
+      "name": "Reduce Health Snapshot",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "id": "c-unhealthy", "leftValue": "={{ $json.overall }}", "rightValue": "unhealthy", "operator": { "type": "string", "operation": "equals" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6f7a8b9c-0001-4000-8000-000000000007",
+      "name": "Unhealthy?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"#ops-alerts\",\n  \"text\": \":x: *Health check FAILED*\\n• Overall: {{ $json.overall }}\\n• Unhealthy services: {{ $json.unhealthy_services.join(', ') }}\\n• Details: ```{{ JSON.stringify($json.probes, null, 2) }}```\\n• Checked at: {{ $json.checked_at }}\\n• Action: investigate immediately — customer-facing workflows may be impacted.\"\n}",
+        "options": { "timeout": 8000 }
+      },
+      "id": "6f7a8b9c-0001-4000-8000-000000000008",
+      "name": "Alert Slack (Health)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, -150],
+      "notes": "Immediate Slack alert to #ops-alerts whenever any probe fails."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://events.pagerduty.com/v2/enqueue",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"routing_key\": \"{{ $env.PAGERDUTY_INTEGRATION_KEY }}\",\n  \"event_action\": \"trigger\",\n  \"dedup_key\": \"n8n-healthcheck-{{ $json.unhealthy_services.join('-') }}\",\n  \"payload\": {\n    \"summary\": \"[CRITICAL] Dayjoy health check failing — {{ $json.unhealthy_services.join(', ') }} down\",\n    \"severity\": \"critical\",\n    \"source\": \"n8n:health-check\",\n    \"component\": $json.unhealthy_services.join(','),\n    \"custom_details\": { probes: $json.probes, checked_at: $json.checked_at }\n  }\n}",
+        "options": { "timeout": 8000 }
+      },
+      "id": "6f7a8b9c-0001-4000-8000-000000000009",
+      "name": "Page On-Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1140, -150],
+      "notes": "Pages the on-call engineer immediately. Dedup key groups repeated failures from the same services into a single incident."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/audit-logs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"event_type\": \"n8n_health_check_failed\",\n  \"severity\": \"critical\",\n  \"resource\": \"dayjoy_platform\",\n  \"resource_id\": $json.unhealthy_services.join(','),\n  \"actor\": \"n8n-health-check-workflow\",\n  \"details\": { overall: $json.overall, probes: $json.probes },\n  \"timestamp\": $json.checked_at\n}",
+        "options": { "timeout": 8000 }
+      },
+      "id": "6f7a8b9c-0001-4000-8000-000000000010",
+      "name": "Log to Audit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 50]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.PROMETHEUS_PUSHGATEWAY_URL }}/metrics/job/dayjoy-n8n-health/instance/{{ $env.N8N_HOST }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "text/plain; version=0.0.4; charset=utf-8" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "string",
+        "body": "=# HELP dayjoy_n8n_health_status 1 = healthy, 0 = unhealthy\\n# TYPE dayjoy_n8n_health_status gauge\\ndayjoy_n8n_health_status {{ $json.overall === 'healthy' ? 1 : 0 }}\\n# HELP dayjoy_n8n_health_unhealthy_count Number of services currently unhealthy\\n# TYPE dayjoy_n8n_health_unhealthy_count gauge\\ndayjoy_n8n_health_unhealthy_count {{ $json.unhealthy_count }}\\n{{ $json.probes.map(p => `dayjoy_n8n_service_health{service=\"${p.service}\"} ${p.healthy ? 1 : 0}\\n`).join('') }}",
+        "options": { "timeout": 8000 }
+      },
+      "id": "6f7a8b9c-0001-4000-8000-000000000011",
+      "name": "Push Health Gauge",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 250],
+      "notes": "Always pushes (healthy or not) so Grafana has a continuous health line."
+    }
+  ],
+  "connections": {
+    "Every 1 Minute": {
+      "main": [
+        [
+          { "node": "Probe n8n", "type": "main", "index": 0 },
+          { "node": "Probe Backend API", "type": "main", "index": 0 },
+          { "node": "Probe Database", "type": "main", "index": 0 },
+          { "node": "Probe Redis", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Probe n8n": { "main": [ [{ "node": "Reduce Health Snapshot", "type": "main", "index": 0 }] ] },
+    "Probe Backend API": { "main": [ [{ "node": "Reduce Health Snapshot", "type": "main", "index": 0 }] ] },
+    "Probe Database": { "main": [ [{ "node": "Reduce Health Snapshot", "type": "main", "index": 0 }] ] },
+    "Probe Redis": { "main": [ [{ "node": "Reduce Health Snapshot", "type": "main", "index": 0 }] ] },
+    "Reduce Health Snapshot": {
+      "main": [
+        [
+          { "node": "Unhealthy?", "type": "main", "index": 0 },
+          { "node": "Push Health Gauge", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Unhealthy?": {
+      "main": [
+        [ { "node": "Alert Slack (Health)", "type": "main", "index": 0 }, { "node": "Log to Audit", "type": "main", "index": 0 }, { "node": "Page On-Call", "type": "main", "index": 0 } ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": true,
+  "tags": [{ "name": "monitoring" }, { "name": "health" }, { "name": "critical" }],
+  "meta": {
+    "templateCreatedBy": "Dayjoy Platform Team",
+    "description": "Probes n8n (/healthz), backend API (/api/health), database (/api/health/db), and Redis (/api/health/redis) every minute. Any failure immediately alerts #ops-alerts on Slack, pages the on-call engineer via PagerDuty, and logs to the audit table. Pushes a health gauge to Prometheus on every run regardless of outcome.",
+    "version": "1.0.0"
+  }
+}

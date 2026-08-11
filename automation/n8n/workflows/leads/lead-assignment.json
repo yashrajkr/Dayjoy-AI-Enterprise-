@@ -1,0 +1,393 @@
+{
+  "name": "Leads — Smart Assignment",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-assignment",
+        "responseMode": "responseNode",
+        "options": {
+          "rawData": true,
+          "binaryPropertyName": "data"
+        }
+      },
+      "id": "a1-lead-assign-001",
+      "name": "Lead Assignment Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "c5e2b8f3-lead-assignment-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst headers = items[0].json.headers || {};\nconst secret = process.env.DAYJOY_WEBHOOK_SECRET;\nconst signature = headers['x-dayjoy-signature'];\nconst timestamp = headers['x-dayjoy-timestamp'];\nconst eventId = headers['x-dayjoy-event-id'];\nconst eventType = headers['x-dayjoy-event'];\nif (!signature || !timestamp || !eventId || !eventType) throw new Error('Missing required headers');\nif (Math.abs(Math.floor(Date.now()/1000) - parseInt(timestamp,10)) > 300) throw new Error('Stale timestamp');\nconst bodyBuffer = await this.helpers.getBinaryDataBuffer(items[0], 'data');\nconst expected = 'sha256=' + crypto.createHmac('sha256', secret).update(bodyBuffer).digest('hex');\nconst sigBuf = Buffer.from(signature), expBuf = Buffer.from(expected);\nif (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) throw new Error('Invalid signature');\nconst ALLOWED = ['lead.created', 'lead.reassign_requested'];\nif (!ALLOWED.includes(eventType)) throw new Error('Unexpected event: ' + eventType);\nconst payload = JSON.parse(bodyBuffer.toString('utf8'));\npayload._meta = { eventId, eventType, receivedAt: new Date().toISOString() };\nreturn [{ json: payload }];"
+      },
+      "id": "a1-lead-assign-002",
+      "name": "Verify HMAC Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "notes": "Canonical verification — see shared/webhook-auth.md"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/automation/event-dedup",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_AUTOMATION_JWT }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"eventId\":\"{{ $json._meta.eventId }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-assign-003",
+      "name": "Event Dedup Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Classify time-of-day: business hours vs after-hours\nconst hour = new Date().getHours(); // 0-23, server local time (set n8n TZ=Asia/Kolkata)\nconst day = new Date().getDay(); // 0=Sun, 6=Sat\nconst isWeekday = day >= 1 && day <= 6; // Mon-Sat in India standard week\nconst isBusinessHours = isWeekday && hour >= 9 && hour < 18;\nreturn [{\n  json: {\n    ...items[0].json,\n    _routing: {\n      isBusinessHours,\n      isAfterHours: !isBusinessHours,\n      hour,\n      day\n    }\n  }\n}];"
+      },
+      "id": "a1-lead-assign-004",
+      "name": "Classify Time Window",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300],
+      "notes": "Business hours = Mon-Sat 09:00-18:00 IST. After-hours leads route to on-call rep."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "value2": true,
+              "operation": "equal",
+              "outputKey": "business_hours"
+            }
+          ]
+        },
+        "fallbackOutput": 1
+      },
+      "id": "a1-lead-assign-005",
+      "name": "Business Hours?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/distributors/available",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-assign-006",
+      "name": "Get Business-Hours Reps",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 200],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "GET /api/distributors/available?status=ACTIVE&onDuty=true"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/distributors/on-call",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-assign-007",
+      "name": "Get On-Call Reps",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 400],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "After-hours: GET /api/distributors/on-call — returns on-call rotation rep"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Smart assignment scoring function — used by both branches\n// Score each rep: +5 territory match, +3 language match, -1 per active lead (workload balance)\nconst lead = $('Verify HMAC Signature').item.json;\nconst reps = ($json.data || $json.reps || []).filter(r => r && r.id);\nif (!reps.length) {\n  return [{ json: { assignedRepId: null, assignmentReason: 'no_reps_available', leadId: lead.leadId || lead.id, lead } }];\n}\n\nconst territory = lead.territory || '';\nconst language = lead.language || 'en';\n\nconst scored = reps.map(r => {\n  let score = 0;\n  const reasons = [];\n  if (r.territory && r.territory === territory) { score += 5; reasons.push('territory_match'); }\n  if (Array.isArray(r.languages) && r.languages.includes(language)) { score += 3; reasons.push('language_match'); }\n  score -= (r.activeLeads || 0); // workload balance\n  if (r.lastAssignedAt) {\n    const minsSince = (Date.now() - new Date(r.lastAssignedAt).getTime()) / 60000;\n    score += Math.min(2, minsSince / 60); // boost reps idle longer\n  }\n  return { rep: r, score, reasons };\n});\n\nscored.sort((a, b) => b.score - a.score);\nconst winner = scored[0];\n\nreturn [{\n  json: {\n    leadId: lead.leadId || lead.id,\n    leadFirstName: lead.firstName,\n    leadLastName: lead.lastName,\n    leadEmail: lead.email,\n    leadPhone: lead.phone,\n    leadTerritory: territory,\n    leadLanguage: language,\n    assignedRepId: winner.rep.id,\n    assignedRepName: winner.rep.name,\n    assignedRepEmail: winner.rep.email,\n    assignedRepPhone: winner.rep.phone,\n    assignmentReason: winner.reasons.join('+') || 'round_robin',\n    assignmentScore: winner.score,\n    assignmentWindow: $('Classify Time Window').item.json._routing.isBusinessHours ? 'business_hours' : 'after_hours'\n  }\n}];"
+      },
+      "id": "a1-lead-assign-008",
+      "name": "Score & Pick Rep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 300],
+      "notes": "Scoring: +5 territory, +3 language, -1/active lead, +idle boost. Highest score wins."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "value1": "={{ $json.assignedRepId }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        },
+        "fallbackOutput": 1
+      },
+      "id": "a1-lead-assign-009",
+      "name": "Rep Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1540, 300]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads/{{ $json.leadId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"assignedTo\":\"{{ $json.assignedRepId }}\",\"assignmentReason\":\"{{ $json.assignmentReason }}\",\"assignmentWindow\":\"{{ $json.assignmentWindow }}\",\"assignmentScore\":{{ $json.assignmentScore }},\"status\":\"ASSIGNED\",\"assignedAt\":\"{{ new Date().toISOString() }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-assign-010",
+      "name": "Update Lead Assignment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 200],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "PUT /api/leads/:id — persist assignment + status=ASSIGNED"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"IN_APP\",\"recipient\":\"{{ $('Score & Pick Rep').item.json.assignedRepId }}\",\"template\":\"LEAD_ASSIGNED\",\"context\":{\"leadName\":\"{{ $('Score & Pick Rep').item.json.leadFirstName }} {{ $('Score & Pick Rep').item.json.leadLastName }}\",\"leadPhone\":\"{{ $('Score & Pick Rep').item.json.leadPhone }}\",\"leadEmail\":\"{{ $('Score & Pick Rep').item.json.leadEmail }}\",\"assignmentReason\":\"{{ $('Score & Pick Rep').item.json.assignmentReason }}\",\"window\":\"{{ $('Score & Pick Rep').item.json.assignmentWindow }}\",\"priority\":\"HIGH\"}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-assign-011",
+      "name": "Notify Assigned Rep",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 200],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"IN_APP\",\"recipient\":\"sales-ops@dayjoy.ai\",\"template\":\"LEAD_UNASSIGNED\",\"context\":{\"leadId\":\"{{ $json.leadId }}\",\"leadName\":\"{{ $json.leadFirstName }} {{ $json.leadLastName }}\",\"reason\":\"{{ $json.assignmentReason }}\"}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-assign-012",
+      "name": "Escalate No-Rep to Ops",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 400],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "Fallback: no reps available → alert Sales Ops for manual assignment"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true,\"eventId\":\"{{ $('Verify HMAC Signature').item.json._meta.eventId }}\",\"assignedTo\":\"{{ $('Score & Pick Rep').item.json.assignedRepId }}\",\"window\":\"{{ $('Score & Pick Rep').item.json.assignmentWindow }}\"}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "a1-lead-assign-013",
+      "name": "Respond 200 Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2200, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true,\"eventId\":\"{{ $('Verify HMAC Signature').item.json._meta.eventId }}\",\"escalated\":true}",
+        "options": { "responseCode": 202 }
+      },
+      "id": "a1-lead-assign-014",
+      "name": "Respond 202 Escalated",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2200, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"error\":\"invalid_signature\"}",
+        "options": { "responseCode": 401 }
+      },
+      "id": "a1-lead-assign-015",
+      "name": "Respond 401 Auth",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [440, 540]
+    }
+  ],
+  "connections": {
+    "Lead Assignment Webhook": {
+      "main": [
+        [
+          { "node": "Verify HMAC Signature", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Verify HMAC Signature": {
+      "main": [
+        [
+          { "node": "Event Dedup Check", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Event Dedup Check": {
+      "main": [
+        [
+          { "node": "Classify Time Window", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Classify Time Window": {
+      "main": [
+        [
+          { "node": "Business Hours?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Business Hours?": {
+      "main": [
+        [
+          { "node": "Get Business-Hours Reps", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Get On-Call Reps", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Get Business-Hours Reps": {
+      "main": [
+        [
+          { "node": "Score & Pick Rep", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Get On-Call Reps": {
+      "main": [
+        [
+          { "node": "Score & Pick Rep", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Score & Pick Rep": {
+      "main": [
+        [
+          { "node": "Rep Found?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Rep Found?": {
+      "main": [
+        [
+          { "node": "Update Lead Assignment", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Escalate No-Rep to Ops", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Update Lead Assignment": {
+      "main": [
+        [
+          { "node": "Notify Assigned Rep", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Notify Assigned Rep": {
+      "main": [
+        [
+          { "node": "Respond 200 Success", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Escalate No-Rep to Ops": {
+      "main": [
+        [
+          { "node": "Respond 202 Escalated", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "tags": [
+    { "name": "leads" },
+    { "name": "agent-a1" }
+  ],
+  "meta": {
+    "templateCreatedBy": "Agent A1 — CRM/Sales/Leads",
+    "description": "Distributes leads to sales team using: territory (state/region), language preference, workload (round-robin via scoring), and time of day (on-call rep after hours). After-hours window = Mon-Sat outside 09:00-18:00 IST."
+  }
+}

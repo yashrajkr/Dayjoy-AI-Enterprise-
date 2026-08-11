@@ -1,0 +1,197 @@
+# Dayjoy AI Platform — Helm Values
+# Default values (override per-environment via -f values-staging.yaml)
+
+# Global
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  environment: production
+  domain: dayjoyai.com
+  # AWS configuration used by the ExternalSecret SecretStore
+  # (see templates/external-secret-store.yaml). Set global.aws.roleArn
+  # at install time via --set to avoid the ACCOUNT_ID placeholder.
+  aws:
+    region: ap-south-1
+    roleArn: ""
+
+# Backend
+backend:
+  enabled: true
+  image:
+    repository: dayjoyai-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicas: 3
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilization: 70
+    targetMemoryUtilization: 80
+  env:
+    ENVIRONMENT: production
+    DEBUG: "false"
+    VECTOR_DB_PROVIDER: qdrant
+    EMBEDDING_PROVIDER: openai
+    VOICE_PROVIDER: vapi
+    TELEPHONY_PROVIDER: twilio
+    WHATSAPP_PROVIDER: meta_cloud
+    EMAIL_PROVIDER: resend
+    SMS_PROVIDER: twilio
+    ENABLE_METRICS: "true"
+    PROMETHEUS_ENABLED: "true"
+    ENABLE_TRACING: "false"
+    ENABLE_SENTRY: "false"
+  # Secrets are fetched at runtime via ExternalSecrets (see templates/external-secret-store.yaml
+  # and the ExternalSecret in templates/backend.yaml). Never commit plaintext secrets here.
+  externalSecret:
+    enabled: true
+    secretStoreName: dayjoy-secret-store
+    remoteRefs:
+      SECRET_KEY: dayjoy/prod/secret-key
+      OPENAI_API_KEY: dayjoy/prod/openai-api-key
+      VAPI_API_KEY: dayjoy/prod/vapi-api-key
+      TWILIO_ACCOUNT_SID: dayjoy/prod/twilio-account-sid
+      TWILIO_AUTH_TOKEN: dayjoy/prod/twilio-auth-token
+      WHATSAPP_ACCESS_TOKEN: dayjoy/prod/whatsapp-access-token
+      RESEND_API_KEY: dayjoy/prod/resend-api-key
+      SENTRY_DSN: dayjoy/prod/sentry-dsn
+  health:
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    initialDelaySeconds: 15
+    periodSeconds: 10
+
+# Frontend
+frontend:
+  enabled: true
+  image:
+    repository: dayjoyai-frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilization: 75
+  env:
+    NEXT_PUBLIC_API_URL: https://api.dayjoyai.com/api/v1
+    NEXT_PUBLIC_APP_NAME: "Dayjoy AI Platform"
+
+# PostgreSQL
+postgresql:
+  enabled: true
+  image: pgvector/pgvector:pg16
+  auth:
+    username: dayjoy
+    # The DB password MUST NOT be set in plaintext here. It is fetched from AWS
+    # Secrets Manager via the ExternalSecret defined in templates/external-secret-store.yaml,
+    # which materializes the Kubernetes Secret named below. The Bitnami postgresql
+    # subchart will consume that secret (key: "password") at install time.
+    existingSecret: "dayjoy-db-secret"
+    database: dayjoyai
+  primary:
+    persistence:
+      enabled: true
+      size: 50Gi
+      storageClass: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+# Redis
+redis:
+  enabled: true
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: true
+      size: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# Qdrant
+qdrant:
+  enabled: true
+  image: qdrant/qdrant:v1.11.0
+  persistence:
+    enabled: true
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+# Ingress
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+  tls:
+    enabled: true
+    secretName: dayjoyai-tls
+  hosts:
+    api: api.dayjoyai.com
+    web: dayjoyai.com
+
+# Network Policies
+networkPolicy:
+  enabled: true
+
+# Monitoring
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    retention: 30d
+    storage: 10Gi
+  grafana:
+    enabled: true
+    # Grafana admin password is provisioned via ExternalSecrets (see
+    # templates/external-secret-store.yaml). The Secret must contain the key
+    # "admin-password" which the Grafana Helm chart consumes via adminExistingSecret.
+    adminExistingSecret: "dayjoy-grafana-secret"
+
+# Backup
+backup:
+  enabled: true
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  retention: 7  # days
+  storage:
+    type: s3
+    bucket: dayjoyai-backups
+    region: ap-south-1

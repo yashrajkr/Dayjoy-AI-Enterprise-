@@ -1,0 +1,389 @@
+{
+  "name": "CRM — Daily Sync & Report",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      },
+      "id": "a1-crm-sync-001",
+      "name": "Daily 02:00 Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "notes": "Runs daily at 02:00 server time. Set TZ=Asia/Kolkata in n8n env."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/customers?updatedSince={{ $today.minus({days:1}).toISO() }}&limit=1000",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-sync-002",
+      "name": "Fetch Recently Updated Customers",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "GET /api/customers?updatedSince=ISO&limit=1000"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/integrations/external-sync",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "sendBodyRaw": true,
+        "jsonBody": "={\"entityType\":\"customer\",\"records\":{{ JSON.stringify($json.data || $json) }}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-sync-003",
+      "name": "Sync Customers to External",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/integrations/external-sync — pushes customer records to external systems (ERP, mailing list, etc.)"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/customers?fields=id,totalOrders,totalSpent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-sync-004",
+      "name": "Fetch Customers for LTV",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/customers/bulk-update-ltv",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "sendBodyRaw": true,
+        "jsonBody": "={\"customers\":{{ JSON.stringify(($json.data || $json).map(c => ({ id: c.id, ltv: c.totalSpent || 0, ordersCount: c.totalOrders || 0 }))) }}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-sync-005",
+      "name": "Update Customer LTV",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/customers/bulk-update-ltv — recompute LTV from orders"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/distributors?active=true",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-sync-006",
+      "name": "Fetch Active Distributors",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/distributors/bulk-update-metrics",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "sendBodyRaw": true,
+        "jsonBody": "={\"distributors\":{{ JSON.stringify(($json.data || $json).map(d => d.id)) }},\"asOf\":\"{{ new Date().toISOString() }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-sync-007",
+      "name": "Update Distributor Metrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/distributors/bulk-update-metrics — recompute team size, sales totals, tier eligibility"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/analytics/sales?from={{ $yesterday.toISODate() }}&to={{ $yesterday.toISODate() }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-sync-008",
+      "name": "Fetch Yesterday's Sales Metrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads?createdSince={{ $yesterday.toISO() }}&limit=500",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-sync-009",
+      "name": "Fetch Yesterday's Leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compile daily CRM summary report\nconst sales = $('Fetch Yesterday's Sales Metrics').item.json.body || $('Fetch Yesterday's Sales Metrics').item.json;\nconst leads = $('Fetch Yesterday's Leads').item.json.body || $('Fetch Yesterday's Leads').item.json;\n\nconst leadData = leads.data || leads.leads || [];\nconst salesData = sales.data || sales;\n\nconst leadStatusCounts = leadData.reduce((acc, l) => {\n  acc[l.status || 'UNKNOWN'] = (acc[l.status || 'UNKNOWN'] || 0) + 1;\n  return acc;\n}, {});\n\nreturn [{\n  json: {\n    reportDate: new Date().toISOString().split('T')[0],\n    generatedAt: new Date().toISOString(),\n    summary: {\n      newLeads: leadData.length,\n      leadStatusCounts,\n      totalSales: salesData.totalSales || 0,\n      totalOrders: salesData.totalOrders || 0,\n      averageOrderValue: salesData.averageOrderValue || 0,\n      newCustomers: salesData.newCustomers || 0,\n      activeDistributors: salesData.activeDistributors || 0\n    }\n  }\n}];"
+      },
+      "id": "a1-crm-sync-010",
+      "name": "Compile Daily Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 300],
+      "notes": "Builds daily CRM summary: newLeads, leadStatusCounts, totalSales, totalOrders, AOV, newCustomers, activeDistributors"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/analytics/crm-daily-summary",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-sync-011",
+      "name": "Save Daily Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/analytics/crm-daily-summary — persisted for trend analysis"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"EMAIL\",\"recipient\":\"crm-admin@dayjoy.ai\",\"template\":\"CRM_DAILY_SUMMARY\",\"context\":{{ JSON.stringify($json.summary) }},\"priority\":\"LOW\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-sync-012",
+      "name": "Email Summary to CRM Admin",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2420, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    }
+  ],
+  "connections": {
+    "Daily 02:00 Schedule": {
+      "main": [
+        [
+          { "node": "Fetch Recently Updated Customers", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Recently Updated Customers": {
+      "main": [
+        [
+          { "node": "Sync Customers to External", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sync Customers to External": {
+      "main": [
+        [
+          { "node": "Fetch Customers for LTV", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Customers for LTV": {
+      "main": [
+        [
+          { "node": "Update Customer LTV", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Update Customer LTV": {
+      "main": [
+        [
+          { "node": "Fetch Active Distributors", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Active Distributors": {
+      "main": [
+        [
+          { "node": "Update Distributor Metrics", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Update Distributor Metrics": {
+      "main": [
+        [
+          { "node": "Fetch Yesterday's Sales Metrics", "type": "main", "index": 0 },
+          { "node": "Fetch Yesterday's Leads", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Yesterday's Sales Metrics": {
+      "main": [
+        [
+          { "node": "Compile Daily Summary", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Yesterday's Leads": {
+      "main": [
+        [
+          { "node": "Compile Daily Summary", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Compile Daily Summary": {
+      "main": [
+        [
+          { "node": "Save Daily Summary", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Save Daily Summary": {
+      "main": [
+        [
+          { "node": "Email Summary to CRM Admin", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "tags": [
+    { "name": "crm" },
+    { "name": "agent-a1" }
+  ],
+  "meta": {
+    "templateCreatedBy": "Agent A1 — CRM/Sales/Leads",
+    "description": "Daily 02:00 sync job. Pushes customer updates to external systems, recomputes customer LTV from orders, recalculates distributor performance metrics, gathers yesterday's sales + leads data, compiles daily CRM summary report, saves to analytics, emails CRM admin."
+  }
+}

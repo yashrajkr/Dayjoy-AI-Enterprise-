@@ -1,0 +1,10 @@
+{
+  "name": "@dayjoy/sdk",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": { "build": "tsc" },
+  "dependencies": {
+    "axios": "^1.7.0"
+  }
+}

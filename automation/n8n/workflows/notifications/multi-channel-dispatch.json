@@ -1,0 +1,218 @@
+{
+  "name": "Notifications — Multi-Channel Dispatch",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "notifications/multi-channel-dispatch",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a2n1-0001-disp-webhook",
+      "name": "Webhook: notification.queued",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "a2n1-disp-webhook-id"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "cond-event", "leftValue": "={{ $json.body.event }}", "rightValue": "notification.queued", "operator": { "type": "string", "operation": "equals" } }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2n1-0002-disp-filter",
+      "name": "Filter: notification.queued",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const n = $input.all()[0].json.body.data;\n// Channels to dispatch to (already filtered by backend based on user preferences)\nconst channels = n.channels || (n.channel ? [n.channel] : ['EMAIL']);\nreturn channels.map(ch => ({\n  json: {\n    channel: ch,\n    notificationId: n.id,\n    tenantId: n.tenantId,\n    userId: n.userId,\n    recipientEmail: n.recipientEmail,\n    recipientPhone: n.recipientPhone,\n    deviceToken: n.deviceToken,\n    title: n.title,\n    body: n.body,\n    template: n.template,\n    data: n.data || {},\n    priority: n.priority || 'NORMAL'\n  }\n}));"
+      },
+      "id": "a2n1-0003-disp-split",
+      "name": "Code: Split Per Channel",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.channel }}",
+        "rules": {
+          "rules": [
+            { "value2": "EMAIL", "outputKey": 0, "label": "Email" },
+            { "value2": "SMS", "outputKey": 1, "label": "SMS" },
+            { "value2": "WHATSAPP", "outputKey": 2, "label": "WhatsApp" },
+            { "value2": "PUSH", "outputKey": 3, "label": "Push" },
+            { "value2": "IN_APP", "outputKey": 4, "label": "In-App" }
+          ]
+        },
+        "fallbackOutput": 4,
+        "options": {}
+      },
+      "id": "a2n1-0004-disp-switch",
+      "name": "Switch: Route By Channel",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@dayjoy.in",
+        "toEmail": "={{ $json.recipientEmail }}",
+        "subject": "={{ $json.title }}",
+        "text": "={{ $json.body }}",
+        "emailFormat": "text",
+        "options": {}
+      },
+      "id": "a2n1-0005-disp-email",
+      "name": "Send: Email (SMTP)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [880, -300],
+      "credentials": { "smtp": { "id": "smtp-cred-id", "name": "smtp" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "resource": "sms",
+        "operation": "send",
+        "from": "={{ $env.TWILIO_FROM_NUMBER }}",
+        "to": "={{ $json.recipientPhone }}",
+        "message": "={{ $json.title }}: {{ $json.body }}",
+        "options": {}
+      },
+      "id": "a2n1-0006-disp-sms",
+      "name": "Send: SMS (Twilio)",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [880, -150],
+      "credentials": { "twilioApi": { "id": "twilio-cred-id", "name": "twilioApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WHATSAPP_API_URL || 'https://graph.facebook.com/v18.0' }}/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Authorization", "value": "Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}" }, { "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"to\": \"{{ $json.recipientPhone }}\",\n  \"type\": \"template\",\n  \"template\": {\n    \"name\": \"{{ $json.template || 'generic_notification' }}\",\n    \"language\": { \"code\": \"en\" },\n    \"components\": [{ \"type\": \"body\", \"parameters\": [{ \"type\": \"text\", \"text\": \"{{ $json.title }}\" }, { \"type\": \"text\", \"text\": \"{{ $json.body }}\" }] }]\n  }\n}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2n1-0007-disp-whatsapp",
+      "name": "Send: WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FCM_API_URL || 'https://fcm.googleapis.com/fcm/send' }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Authorization", "value": "key={{ $env.FCM_SERVER_KEY }}" }, { "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"to\": \"{{ $json.deviceToken }}\",\n  \"notification\": { \"title\": \"{{ $json.title }}\", \"body\": \"{{ $json.body }}\" },\n  \"data\": {{ JSON.stringify($json.data || {}) }},\n  \"priority\": \"{{ $json.priority === 'HIGH' ? 'high' : 'normal' }}\"\n}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2n1-0008-disp-push",
+      "name": "Send: Push (FCM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 150],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/in-app",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"userId\": \"{{ $json.userId }}\",\n  \"tenantId\": \"{{ $json.tenantId }}\",\n  \"title\": \"{{ $json.title }}\",\n  \"body\": \"{{ $json.body }}\",\n  \"data\": {{ JSON.stringify($json.data || {}) }},\n  \"priority\": \"{{ $json.priority }}\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2n1-0009-disp-inapp",
+      "name": "Send: In-App (Backend)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge all 5 channel branches back into one stream for status update.\nconst items = $input.all();\nreturn items.map(i => ({\n  json: {\n    notificationId: i.json.notificationId || $('Code: Split Per Channel').item.json.notificationId,\n    tenantId: i.json.tenantId || $('Code: Split Per Channel').item.json.tenantId,\n    channel: i.json.channel || $('Code: Split Per Channel').item.json.channel,\n    status: 'SENT',\n    sentAt: new Date().toISOString()\n  }\n}));"
+      },
+      "id": "a2n1-0010-disp-merge",
+      "name": "Merge: Channel Status",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1100, 0],
+      "mergeRule": { "mode": "combineAll" }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/{{ $json.notificationId }}/delivery-status",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{ $json.channel }}\",\n  \"status\": \"{{ $json.status }}\",\n  \"sentAt\": \"{{ $json.sentAt }}\",\n  \"workflow\": \"multi-channel-dispatch\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2n1-0011-disp-status",
+      "name": "Update: Delivery Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Webhook: notification.queued": { "main": [ [ { "node": "Filter: notification.queued", "type": "main", "index": 0 } ] ] },
+    "Filter: notification.queued": { "main": [ [ { "node": "Code: Split Per Channel", "type": "main", "index": 0 } ] ] },
+    "Code: Split Per Channel": { "main": [ [ { "node": "Switch: Route By Channel", "type": "main", "index": 0 } ] ] },
+    "Switch: Route By Channel": {
+      "main": [
+        [ { "node": "Send: Email (SMTP)", "type": "main", "index": 0 } ],
+        [ { "node": "Send: SMS (Twilio)", "type": "main", "index": 0 } ],
+        [ { "node": "Send: WhatsApp", "type": "main", "index": 0 } ],
+        [ { "node": "Send: Push (FCM)", "type": "main", "index": 0 } ],
+        [ { "node": "Send: In-App (Backend)", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Send: Email (SMTP)": { "main": [ [ { "node": "Merge: Channel Status", "type": "main", "index": 0 } ] ] },
+    "Send: SMS (Twilio)": { "main": [ [ { "node": "Merge: Channel Status", "type": "main", "index": 0 } ] ] },
+    "Send: WhatsApp": { "main": [ [ { "node": "Merge: Channel Status", "type": "main", "index": 0 } ] ] },
+    "Send: Push (FCM)": { "main": [ [ { "node": "Merge: Channel Status", "type": "main", "index": 0 } ] ] },
+    "Send: In-App (Backend)": { "main": [ [ { "node": "Merge: Channel Status", "type": "main", "index": 0 } ] ] },
+    "Merge: Channel Status": { "main": [ [ { "node": "Update: Delivery Status", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "notifications" }, { "name": "dispatch" }, { "name": "multi-channel" }, { "name": "dayjoy" }]
+}

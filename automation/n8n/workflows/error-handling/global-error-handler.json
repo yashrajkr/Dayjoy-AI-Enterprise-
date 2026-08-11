@@ -1,0 +1,269 @@
+{
+  "name": "Dayjoy — Global Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1a2b3c4d-0001-4000-8000-000000000001",
+      "name": "Error Trigger (All Workflows)",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "notes": "Fires for ANY workflow error in the n8n instance. Captures execution id, workflow id, node name, error message, stack trace, and timestamp."
+    },
+    {
+      "parameters": {
+        "mode": "json",
+        "jsonOutput": "={\n  \"event_type\": \"workflow_error\",\n  \"timestamp\": \"$now.toISO()\",\n  \"execution_id\": $json.execution.id,\n  \"workflow_id\": $json.workflow.id,\n  \"workflow_name\": $json.workflow.name,\n  \"node_name\": $json.execution.lastNodeExecuted,\n  \"error_message\": $json.execution.error?.message || $json.execution.status,\n  \"error_stack\": $json.execution.error?.stack || null,\n  \"error_code\": $json.execution.error?.code || null,\n  \"run_mode\": $json.execution.mode,\n  \"retry_of\": $json.execution.retryOf || null,\n  \"attempt\": $json.execution.attempt || 1\n}"
+      },
+      "id": "1a2b3c4d-0001-4000-8000-000000000002",
+      "name": "Normalize Error Payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Classify the error into a category for routing.\n// Categories: transient, data, auth, external, unknown\nconst msg = ($json.error_message || '').toLowerCase();\nconst stack = ($json.error_stack || '').toLowerCase();\nconst code = ($json.error_code || '').toString().toLowerCase();\nconst text = `${msg} ${stack} ${code}`;\n\nlet category = 'unknown';\nlet severity = 'warning';\nlet retryable = false;\n\n// Transient: network blips, timeouts, connection resets, 5xx\nif (\n  text.includes('etimedout') ||\n  text.includes('econnreset') ||\n  text.includes('econnrefused') ||\n  text.includes('enotfound') ||\n  text.includes('socket hang up') ||\n  text.includes('timeout') ||\n  text.includes('503') ||\n  text.includes('502') ||\n  text.includes('504') ||\n  text.includes('service unavailable')\n) {\n  category = 'transient';\n  severity = 'warning';\n  retryable = true;\n}\n// Auth: 401, 403, token expired, unauthorized\nelse if (\n  text.includes('401') ||\n  text.includes('403') ||\n  text.includes('unauthorized') ||\n  text.includes('forbidden') ||\n  text.includes('token expired') ||\n  text.includes('invalid_grant') ||\n  text.includes('invalid token')\n) {\n  category = 'auth';\n  severity = 'critical';\n  retryable = true; // retry once after token refresh\n}\n// Rate limit: 429\nelse if (text.includes('429') || text.includes('rate limit') || text.includes('too many requests')) {\n  category = 'transient';\n  severity = 'warning';\n  retryable = true;\n}\n// Data: validation errors, schema mismatch, missing fields\nelse if (\n  text.includes('validation') ||\n  text.includes('schema') ||\n  text.includes('required field') ||\n  text.includes('invalid input') ||\n  text.includes('not null') ||\n  text.includes('foreign key')\n) {\n  category = 'data';\n  severity = 'error';\n  retryable = false;\n}\n// External: third-party API returned an error (excluding 5xx already handled)\nelse if (\n  text.includes('whatsapp') ||\n  text.includes('sendgrid') ||\n  text.includes('razorpay') ||\n  text.includes('google') ||\n  text.includes('openai') ||\n  text.includes('anthropic')\n) {\n  category = 'external';\n  severity = 'error';\n  retryable = true;\n}\n\nreturn {\n  json: {\n    ...$json,\n    category,\n    severity,\n    retryable,\n    classified_at: new Date().toISOString()\n  }\n};\n"
+      },
+      "id": "1a2b3c4d-0001-4000-8000-000000000003",
+      "name": "Classify Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/audit-logs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "X-Source", "value": "n8n-error-handler" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"event_type\": \"n8n_workflow_error\",\n  \"severity\": $json.severity,\n  \"category\": $json.category,\n  \"resource\": \"n8n_workflow\",\n  \"resource_id\": $json.workflow_id,\n  \"resource_name\": $json.workflow_name,\n  \"actor\": \"n8n-system\",\n  \"details\": {\n    \"execution_id\": $json.execution_id,\n    \"node_name\": $json.node_name,\n    \"error_message\": $json.error_message,\n    \"error_code\": $json.error_code,\n    \"retry_of\": $json.retry_of,\n    \"attempt\": $json.attempt,\n    \"run_mode\": $json.run_mode\n  },\n  \"metadata\": {\n    \"stack_trace\": $json.error_stack,\n    \"retryable\": $json.retryable,\n    \"classified_at\": $json.classified_at\n  },\n  \"timestamp\": $json.timestamp\n}",
+        "options": {
+          "timeout": 10000,
+          "response": { "response": { "fullResponse": false } }
+        }
+      },
+      "id": "1a2b3c4d-0001-4000-8000-000000000004",
+      "name": "Log to Audit (DB)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 0],
+      "retryOnFail": false,
+      "notes": "Persists the error to the Dayjoy audit_logs table via the backend audit-logs API. Non-blocking on failure — downstream alert still fires."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  { "id": "cond-transient", "leftValue": "={{ $json.category }}", "rightValue": "transient", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": "transient"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  { "id": "cond-data", "leftValue": "={{ $json.category }}", "rightValue": "data", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": "data"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  { "id": "cond-auth", "leftValue": "={{ $json.category }}", "rightValue": "auth", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": "auth"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  { "id": "cond-external", "leftValue": "={{ $json.category }}", "rightValue": "external", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": "external"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1a2b3c4d-0001-4000-8000-000000000005",
+      "name": "Route by Category",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/retry-execution",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"execution_id\": $json.execution_id,\n  \"workflow_id\": $json.workflow_id,\n  \"max_attempts\": 3,\n  \"backoff_seconds\": 30,\n  \"strategy\": \"linear\",\n  \"reason\": \"transient_error_auto_retry\"\n}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "1a2b3c4d-0001-4000-8000-000000000006",
+      "name": "Retry Transient (3x / 30s)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1140, -300],
+      "notes": "Transient errors (timeouts, 5xx, connection resets, 429) get auto-retried up to 3 times with a 30-second linear backoff via the backend retry orchestrator."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"#data-team-alerts\",\n  \"text\": \":rotating_light: *Data Error in n8n workflow*\\n• Workflow: `{{ $json.workflow_name }}` ({{ $json.workflow_id }})\\n• Node: `{{ $json.node_name }}`\\n• Execution: {{ $json.execution_id }}\\n• Error: {{ $json.error_message }}\\n• Category: data (NOT retried — needs manual review)\\n• Time: {{ $json.timestamp }}\\n• Audit log: {{ $env.DAYJOY_API_URL }}/admin/audit-logs?execution_id={{ $json.execution_id }}\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "1a2b3c4d-0001-4000-8000-000000000007",
+      "name": "Notify Data Team (Slack)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1140, -100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"#security-alerts\",\n  \"text\": \":lock: *AUTH ERROR — possible credential compromise*\\n• Workflow: `{{ $json.workflow_name }}` ({{ $json.workflow_id }})\\n• Node: `{{ $json.node_name }}`\\n• Execution: {{ $json.execution_id }}\\n• Error: {{ $json.error_message }}\\n• Severity: CRITICAL\\n• Action: token refresh attempted; if persistent, rotate credentials immediately.\\n• Audit log: {{ $env.DAYJOY_API_URL }}/admin/audit-logs?execution_id={{ $json.execution_id }}\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "1a2b3c4d-0001-4000-8000-000000000008",
+      "name": "Notify Security Team (Slack)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1140, 120]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/check-external-service",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow_id\": $json.workflow_id,\n  \"node_name\": $json.node_name,\n  \"error_message\": $json.error_message,\n  \"execution_id\": $json.execution_id\n}",
+        "options": { "timeout": 20000 }
+      },
+      "id": "1a2b3c4d-0001-4000-8000-000000000009",
+      "name": "Check External Service Health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1140, 340],
+      "notes": "Probes the external provider (WhatsApp / SendGrid / Razorpay / Google) for an outage before deciding to retry vs. alert."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"#ops-alerts\",\n  \"text\": \":warning: *External service degraded*\\n• Workflow: `{{ $('Normalize Error Payload').item.json.workflow_name }}`\\n• Node: `{{ $('Normalize Error Payload').item.json.node_name }}`\\n• Provider status check: {{ $json.status || 'unknown' }}\\n• Recommendation: {{ $json.recommendation || 'investigate' }}\\n• Error: {{ $('Normalize Error Payload').item.json.error_message }}\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "1a2b3c4d-0001-4000-8000-000000000010",
+      "name": "Alert Ops (External Outage)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://events.pagerduty.com/v2/enqueue",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"routing_key\": \"{{ $env.PAGERDUTY_INTEGRATION_KEY }}\",\n  \"event_action\": \"trigger\",\n  \"dedup_key\": \"n8n-auth-{{ $json.workflow_id }}-{{ $json.node_name }}\",\n  \"payload\": {\n    \"summary\": \"[CRITICAL] n8n auth error — {{ $json.workflow_name }} / {{ $json.node_name }}\",\n    \"severity\": \"critical\",\n    \"source\": \"n8n:{{ $json.workflow_name }}\",\n    \"component\": $json.node_name,\n    \"custom_details\": {\n      \"execution_id\": $json.execution_id,\n      \"error_message\": $json.error_message,\n      \"workflow_id\": $json.workflow_id\n    }\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "1a2b3c4d-0001-4000-8000-000000000011",
+      "name": "Page On-Call (Critical Auth)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1140, 240],
+      "notes": "CRITICAL severity only — auth errors page the on-call engineer via PagerDuty. Dedup key prevents alert storms."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"#ops-alerts\",\n  \"text\": \":grey_question: *Unclassified n8n error*\\n• Workflow: `{{ $json.workflow_name }}` ({{ $json.workflow_id }})\\n• Node: `{{ $json.node_name }}`\\n• Execution: {{ $json.execution_id }}\\n• Error: {{ $json.error_message }}\\n• Category: unknown (review classifier rules)\\n• Time: {{ $json.timestamp }}\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "1a2b3c4d-0001-4000-8000-000000000012",
+      "name": "Fallback Alert (Unknown)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1140, 560]
+    }
+  ],
+  "connections": {
+    "Error Trigger (All Workflows)": { "main": [ [{ "node": "Normalize Error Payload", "type": "main", "index": 0 }] ] },
+    "Normalize Error Payload": { "main": [ [{ "node": "Classify Error", "type": "main", "index": 0 }] ] },
+    "Classify Error": { "main": [ [{ "node": "Log to Audit (DB)", "type": "main", "index": 0 }] ] },
+    "Log to Audit (DB)": { "main": [ [{ "node": "Route by Category", "type": "main", "index": 0 }] ] },
+    "Route by Category": {
+      "main": [
+        [ { "node": "Retry Transient (3x / 30s)", "type": "main", "index": 0 } ],
+        [ { "node": "Notify Data Team (Slack)", "type": "main", "index": 0 } ],
+        [ { "node": "Notify Security Team (Slack)", "type": "main", "index": 0 }, { "node": "Page On-Call (Critical Auth)", "type": "main", "index": 0 } ],
+        [ { "node": "Check External Service Health", "type": "main", "index": 0 } ],
+        [ { "node": "Fallback Alert (Unknown)", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Check External Service Health": { "main": [ [{ "node": "Alert Ops (External Outage)", "type": "main", "index": 0 }] ] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": true,
+  "tags": [{ "name": "error-handling" }, { "name": "critical" }, { "name": "production" }],
+  "meta": {
+    "templateCreatedBy": "Dayjoy Platform Team",
+    "description": "Catches every workflow error in the n8n instance, classifies it (transient/data/auth/external), logs to audit DB, and routes to the right team. Transient errors auto-retry 3x/30s; auth errors page on-call; data errors go to data team; external errors probe the provider then alert ops.",
+    "version": "1.0.0"
+  }
+}

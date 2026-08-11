@@ -1,0 +1,139 @@
+{
+  "name": "Calendar — Appointment Booking (Google Calendar)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "calendar/appointment-booking",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a2c1-0001-booking-webhook",
+      "name": "Webhook: appointment.created",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "a2c1-booking-webhook-id"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "cond-event", "leftValue": "={{ $json.body.event }}", "rightValue": "appointment.created", "operator": { "type": "string", "operation": "equals" } }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2c1-0002-booking-filter",
+      "name": "Filter: appointment.created",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const a = $input.all()[0].json.body.data;\nconst dtStart = a.startTime || a.start || a.scheduledAt;\nconst dtEnd = a.endTime || a.end || new Date(new Date(dtStart).getTime() + 60 * 60 * 1000).toISOString();\nconst attendees = [];\nif (a.customerEmail) attendees.push({ email: a.customerEmail, displayName: a.customerName || 'Customer' });\nif (a.employeeEmail) attendees.push({ email: a.employeeEmail, displayName: a.employeeName || 'Employee' });\nconst location = a.type === 'ONLINE' ? (a.meetingLink || 'https://meet.dayjoy.in/' + a.id) : (a.location || '');\nconst baseEvent = {\n  summary: a.title || 'Dayjoy Appointment',\n  description: a.agenda || a.notes || 'Dayjoy appointment',\n  location,\n  start: { dateTime: dtStart, timeZone: 'Asia/Kolkata' },\n  end: { dateTime: dtEnd, timeZone: 'Asia/Kolkata' },\n  attendees,\n  reminders: {\n    useDefault: false,\n    overrides: [\n      { method: 'email', minutes: 24 * 60 },\n      { method: 'popup', minutes: 60 },\n      { method: 'popup', minutes: 15 }\n    ]\n  },\n  source: { title: 'Dayjoy', url: `https://app.dayjoy.in/appointments/${a.id}` }\n};\nreturn [{\n  json: {\n    event: baseEvent,\n    appointmentId: a.id,\n    tenantId: a.tenantId,\n    customerEmail: a.customerEmail,\n    employeeEmail: a.employeeEmail,\n    employeeCalendarId: a.employeeEmail,\n    customerCalendarId: a.customerEmail\n  }\n}];"
+      },
+      "id": "a2c1-0003-booking-prep",
+      "name": "Code: Build GCal Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "calendarId": { "__rl": true, "value": "={{ $json.employeeCalendarId }}", "mode": "id" },
+        "eventTitle": "={{ $json.event.summary }}",
+        "start": "={{ $json.event.start.dateTime }}",
+        "end": "={{ $json.event.end.dateTime }}",
+        "additionalFields": {
+          "location": "={{ $json.event.location }}",
+          "description": "={{ $json.event.description }}",
+          "attendees": "={{ JSON.stringify($json.event.attendees.map(a => a.email)).replace(/\\[|\\]|\"/g, '') }}",
+          "sendUpdates": "all",
+          "remindersUseDefault": false,
+          "reminders": "[{\"method\":\"email\",\"minutes\":1440},{\"method\":\"popup\",\"minutes\":60},{\"method\":\"popup\",\"minutes\":15}]"
+        }
+      },
+      "id": "a2c1-0004-booking-employee-gcal",
+      "name": "GCal: Create Employee Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [660, 0],
+      "credentials": { "googleCalendarOAuth2Api": { "id": "googleCalendar", "name": "googleCalendar" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/appointments/{{ $('Code: Build GCal Event').item.json.appointmentId }}/external-ref",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"provider\": \"GOOGLE_CALENDAR\",\n  \"externalEventId\": \"{{ $json.id }}\",\n  \"externalCalendarId\": \"{{ $('Code: Build GCal Event').item.json.employeeCalendarId }}\",\n  \"htmlLink\": \"{{ $json.htmlLink || '' }}\",\n  \"scope\": \"EMPLOYEE\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2c1-0005-booking-link-employee",
+      "name": "Persist: Employee GCal Event ID",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"EMAIL\",\n  \"event\": \"appointment_booked_confirmation\",\n  \"recipientEmail\": \"{{ $('Code: Build GCal Event').item.json.customerEmail }}\",\n  \"appointmentId\": \"{{ $('Code: Build GCal Event').item.json.appointmentId }}\",\n  \"tenantId\": \"{{ $('Code: Build GCal Event').item.json.tenantId }}\",\n  \"template\": \"appointment-confirmation\",\n  \"metadata\": { \"workflow\": \"appointment-booking\", \"googleEventId\": \"{{ $('GCal: Create Employee Event').item.json.id }}\" }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2c1-0006-booking-notify",
+      "name": "Dispatch: Confirmation Notifications",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"CALENDAR\",\n  \"event\": \"google_calendar_event_created\",\n  \"appointmentId\": \"{{ $('Code: Build GCal Event').item.json.appointmentId }}\",\n  \"status\": \"SUCCESS\",\n  \"tenantId\": \"{{ $('Code: Build GCal Event').item.json.tenantId }}\",\n  \"metadata\": { \"workflow\": \"appointment-booking\", \"googleEventId\": \"{{ $('GCal: Create Employee Event').item.json.id }}\", \"attendees\": [\"{{ $('Code: Build GCal Event').item.json.customerEmail }}\", \"{{ $('Code: Build GCal Event').item.json.employeeEmail }}\"] }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2c1-0007-booking-audit",
+      "name": "Log: Audit Booking",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Webhook: appointment.created": { "main": [ [ { "node": "Filter: appointment.created", "type": "main", "index": 0 } ] ] },
+    "Filter: appointment.created": { "main": [ [ { "node": "Code: Build GCal Event", "type": "main", "index": 0 } ] ] },
+    "Code: Build GCal Event": { "main": [ [ { "node": "GCal: Create Employee Event", "type": "main", "index": 0 } ] ] },
+    "GCal: Create Employee Event": { "main": [ [ { "node": "Persist: Employee GCal Event ID", "type": "main", "index": 0 } ] ] },
+    "Persist: Employee GCal Event ID": { "main": [ [ { "node": "Dispatch: Confirmation Notifications", "type": "main", "index": 0 } ] ] },
+    "Dispatch: Confirmation Notifications": { "main": [ [ { "node": "Log: Audit Booking", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "calendar" }, { "name": "appointment" }, { "name": "google" }, { "name": "dayjoy" }]
+}

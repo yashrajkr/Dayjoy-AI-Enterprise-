@@ -1,0 +1,500 @@
+{
+  "name": "CRM — Distributor Update Routing",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "crm-distributor-updates",
+        "responseMode": "responseNode",
+        "options": {
+          "rawData": true,
+          "binaryPropertyName": "data"
+        }
+      },
+      "id": "a1-crm-dist-001",
+      "name": "Distributor Updated Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "c4d9e2b8-crm-distributor-updates-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst headers = items[0].json.headers || {};\nconst secret = process.env.DAYJOY_WEBHOOK_SECRET;\nconst signature = headers['x-dayjoy-signature'];\nconst timestamp = headers['x-dayjoy-timestamp'];\nconst eventId = headers['x-dayjoy-event-id'];\nconst eventType = headers['x-dayjoy-event'];\nif (!signature || !timestamp || !eventId || !eventType) throw new Error('Missing required headers');\nif (Math.abs(Math.floor(Date.now()/1000) - parseInt(timestamp,10)) > 300) throw new Error('Stale timestamp');\nconst bodyBuffer = await this.helpers.getBinaryDataBuffer(items[0], 'data');\nconst expected = 'sha256=' + crypto.createHmac('sha256', secret).update(bodyBuffer).digest('hex');\nconst sigBuf = Buffer.from(signature), expBuf = Buffer.from(expected);\nif (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) throw new Error('Invalid signature');\nconst ALLOWED = ['distributor.updated'];\nif (!ALLOWED.includes(eventType)) throw new Error('Unexpected event: ' + eventType);\nconst payload = JSON.parse(bodyBuffer.toString('utf8'));\npayload._meta = { eventId, eventType, receivedAt: new Date().toISOString() };\nreturn [{ json: payload }];"
+      },
+      "id": "a1-crm-dist-002",
+      "name": "Verify HMAC Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/automation/event-dedup",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_AUTOMATION_JWT }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"eventId\":\"{{ $json._meta.eventId }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-dist-003",
+      "name": "Event Dedup Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compute diff of changed fields\nconst p = items[0].json;\nconst before = p.before || p.previous || {};\nconst after = p.after || p.current || p.distributor || {};\n\nconst changedFields = [];\nfor (const key of Object.keys(after)) {\n  if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {\n    changedFields.push(key);\n  }\n}\n\n// Determine the dominant routing bucket\nlet route = 'other';\nif (changedFields.includes('tier')) route = 'tier_changed';\nelse if (changedFields.includes('commissionRate')) route = 'commission_changed';\nelse if (changedFields.includes('status') && after.status === 'TERMINATED') route = 'terminated';\nelse if (changedFields.includes('status')) route = 'status_changed';\n\nreturn [{\n  json: {\n    distributorId: after.id || p.distributorId,\n    distributorName: after.name,\n    before,\n    after,\n    changedFields,\n    route,\n    _meta: p._meta\n  }\n}];"
+      },
+      "id": "a1-crm-dist-004",
+      "name": "Diff Changed Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300],
+      "notes": "Compute field-level diff between before/after. Routes by dominant change: tier, commissionRate, status (TERMINATED), or other."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "value1": "={{ $json.route }}",
+              "value2": "tier_changed",
+              "operation": "equal",
+              "outputKey": "tier"
+            },
+            {
+              "value1": "={{ $json.route }}",
+              "value2": "commission_changed",
+              "operation": "equal",
+              "outputKey": "commission"
+            },
+            {
+              "value1": "={{ $json.route }}",
+              "value2": "terminated",
+              "operation": "equal",
+              "outputKey": "terminated"
+            },
+            {
+              "value1": "={{ $json.route }}",
+              "value2": "status_changed",
+              "operation": "equal",
+              "outputKey": "status"
+            }
+          ]
+        },
+        "fallbackOutput": 4
+      },
+      "id": "a1-crm-dist-005",
+      "name": "Route by Change Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/distributors/{{ $json.distributorId }}/downline",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-dist-006",
+      "name": "Fetch Downline Team",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 120],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "tier_changed → GET downline to notify each member of tier change impact"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "sendBodyRaw": true,
+        "jsonBody": "={\"channel\":\"IN_APP\",\"recipients\":[{{ ($json.data || $json.downline || []).map(m => '\"' + m.id + '\"').join(',') }}],\"template\":\"UPLINE_TIER_CHANGE\",\"context\":{\"distributorName\":\"{{ $('Diff Changed Fields').item.json.distributorName }}\",\"oldTier\":\"{{ $('Diff Changed Fields').item.json.before.tier }}\",\"newTier\":\"{{ $('Diff Changed Fields').item.json.after.tier }}\"}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-dist-007",
+      "name": "Notify Downline of Tier Change",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 120],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/commissions/recalculate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"distributorId\":\"{{ $json.distributorId }}\",\"oldRate\":{{ $json.before.commissionRate || 0 }},\"newRate\":{{ $json.after.commissionRate || 0 }},\"reason\":\"distributor_update\",\"effectiveFrom\":\"{{ new Date().toISOString() }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-dist-008",
+      "name": "Recalculate Pending Commissions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "commission_changed → recalc pending (unpaid) commissions with new rate"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"EMAIL\",\"recipient\":\"{{ $json.after.email }}\",\"template\":\"COMMISSION_RATE_CHANGED\",\"context\":{\"distributorName\":\"{{ $json.distributorName }}\",\"oldRate\":{{ $json.before.commissionRate || 0 }},\"newRate\":{{ $json.after.commissionRate || 0 }}}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-dist-009",
+      "name": "Email Distributor Rate Change",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/customers/reassign",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"fromDistributorId\":\"{{ $json.distributorId }}\",\"toDistributorId\":\"{{ $json.after.sponsorId || $json.after.uplineId }}\",\"reason\":\"distributor_terminated\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-dist-010",
+      "name": "Reassign Customers to Sponsor",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 480],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "terminated → POST /api/customers/reassign to sponsor (upline)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/orders/reassign",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"fromDistributorId\":\"{{ $json.distributorId }}\",\"toDistributorId\":\"{{ $json.after.sponsorId || $json.after.uplineId }}\",\"reason\":\"distributor_terminated\",\"onlyOpenOrders\":true}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-dist-011",
+      "name": "Reassign Open Orders to Sponsor",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 480],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"IN_APP\",\"recipient\":\"{{ $json.after.sponsorId || $json.after.uplineId }}\",\"template\":\"TERMINATED_DOWNLINE_REASSIGNMENT\",\"context\":{\"terminatedDistributor\":\"{{ $json.distributorName }}\",\"customerCount\":\"{{ $json.reassignedCustomers || 'N/A' }}\"},\"priority\":\"HIGH\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-dist-012",
+      "name": "Notify Sponsor of Reassignment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 480],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/audit-log",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"event\":\"distributor.status_changed\",\"severity\":\"INFO\",\"meta\":{\"distributorId\":\"{{ $json.distributorId }}\",\"oldStatus\":\"{{ $json.before.status }}\",\"newStatus\":\"{{ $json.after.status }}\"}}",
+        "options": {
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-dist-013",
+      "name": "Log Status Change",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 640],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "status_changed (not TERMINATED) → just audit-log"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/audit-log",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"event\":\"distributor.updated\",\"severity\":\"INFO\",\"meta\":{\"distributorId\":\"{{ $json.distributorId }}\",\"changedFields\":{{ JSON.stringify($json.changedFields) }}}}",
+        "options": {
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-dist-014",
+      "name": "Log Minor Update",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 800],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "Fallback for non-routing changes — just audit-log"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true,\"eventId\":\"{{ $('Verify HMAC Signature').item.json._meta.eventId }}\",\"route\":\"{{ $json.route }}\"}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "a1-crm-dist-015",
+      "name": "Respond 200 Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1760, 460]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"error\":\"invalid_signature\"}",
+        "options": { "responseCode": 401 }
+      },
+      "id": "a1-crm-dist-016",
+      "name": "Respond 401 Auth",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [220, 540]
+    }
+  ],
+  "connections": {
+    "Distributor Updated Webhook": {
+      "main": [
+        [
+          { "node": "Verify HMAC Signature", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Verify HMAC Signature": {
+      "main": [
+        [
+          { "node": "Event Dedup Check", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Event Dedup Check": {
+      "main": [
+        [
+          { "node": "Diff Changed Fields", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Diff Changed Fields": {
+      "main": [
+        [
+          { "node": "Route by Change Type", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Route by Change Type": {
+      "main": [
+        [
+          { "node": "Fetch Downline Team", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Recalculate Pending Commissions", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Reassign Customers to Sponsor", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Log Status Change", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Log Minor Update", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Downline Team": {
+      "main": [
+        [
+          { "node": "Notify Downline of Tier Change", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Notify Downline of Tier Change": {
+      "main": [
+        [
+          { "node": "Respond 200 Success", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Recalculate Pending Commissions": {
+      "main": [
+        [
+          { "node": "Email Distributor Rate Change", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Email Distributor Rate Change": {
+      "main": [
+        [
+          { "node": "Respond 200 Success", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Reassign Customers to Sponsor": {
+      "main": [
+        [
+          { "node": "Reassign Open Orders to Sponsor", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Reassign Open Orders to Sponsor": {
+      "main": [
+        [
+          { "node": "Notify Sponsor of Reassignment", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Notify Sponsor of Reassignment": {
+      "main": [
+        [
+          { "node": "Respond 200 Success", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Log Status Change": {
+      "main": [
+        [
+          { "node": "Respond 200 Success", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Log Minor Update": {
+      "main": [
+        [
+          { "node": "Respond 200 Success", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "tags": [
+    { "name": "crm" },
+    { "name": "agent-a1" }
+  ],
+  "meta": {
+    "templateCreatedBy": "Agent A1 — CRM/Sales/Leads",
+    "description": "Triggered by distributor.updated webhook. Diffs before/after. Routes by dominant change: tier_changed→notify downline; commission_changed→recalc pending + email distributor; terminated→reassign customers + open orders to sponsor + notify sponsor; status_changed→audit-log; other→audit-log."
+  }
+}

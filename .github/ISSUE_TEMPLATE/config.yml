@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📚 Documentation
+    url: https://docs.dayjoyai.com
+    about: Read the documentation before opening an issue.
+  - name: 💬 Slack Community
+    url: https://dayjoyai.slack.com
+    about: Ask questions and discuss with the community.
+  - name: 🔒 Security Vulnerability
+    url: mailto:security@dayjoyai.com
+    about: Report security vulnerabilities via email (do NOT open a public issue).
+  - name: 📧 General Inquiry
+    url: mailto:engineering@dayjoyai.com
+    about: For general questions not suitable for issues.

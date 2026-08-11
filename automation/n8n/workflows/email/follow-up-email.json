@@ -1,0 +1,144 @@
+{
+  "name": "Email — Post-Delivery Follow-Up (Review)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "email/follow-up",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a2e3-0001-followup-webhook",
+      "name": "Webhook: order.delivered",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "a2e3-followup-webhook-id"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "cond-event", "leftValue": "={{ $json.body.event }}", "rightValue": "order.delivered", "operator": { "type": "string", "operation": "equals" } }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2e3-0002-followup-filter",
+      "name": "Filter: order.delivered",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 3,
+        "unit": "days",
+        "options": {}
+      },
+      "id": "a2e3-0003-followup-wait",
+      "name": "Wait: 3 Days After Delivery",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/orders/{{ $json.body.data.id }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2e3-0004-followup-fetch",
+      "name": "Fetch: Latest Order State",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.all()[0].json.data || $input.all()[0].json;\n// Skip if order is no longer delivered (e.g., returned)\nif ((r.status || '').toUpperCase() !== 'DELIVERED') {\n  return [{ json: { skip: true, reason: `Order status is ${r.status}, not DELIVERED` } }];\n}\nconst productNames = (r.items || []).map(i => i.productName || i.name || 'your purchase').join(', ');\nconst usageTips = `<ul>${(r.items || []).map(i => `<li><strong>${i.productName || i.name}:</strong> Use as directed. For best results, follow the recommended dosage & timing.</li>`).join('') || '<li>For product usage tips, please visit our knowledge base.</li>'}</ul>`;\nconst reviewUrl = `https://app.dayjoy.in/orders/${r.id || r.orderNumber}/review`;\nconst html = `\n<!doctype html><html><body style=\"font-family:Arial,Helvetica,sans-serif;color:#1f2937;background:#fff7ed;margin:0;padding:0;\">\n  <div style=\"max-width:600px;margin:0 auto;padding:32px;\">\n    <h1 style=\"color:#ea580c;\">How's ${productNames} working for you?</h1>\n    <p>Hi ${r.customer?.firstName || 'Customer'},</p>\n    <p>We hope you're enjoying your recent purchase from Dayjoy. Your feedback helps us improve and helps other customers make informed decisions.</p>\n    <h2 style=\"color:#9a3412;\">Quick Usage Tips</h2>\n    ${usageTips}\n    <h2 style=\"color:#9a3412;\">Share Your Experience</h2>\n    <p>Take 60 seconds to leave a review — it truly helps.</p>\n    <p><a href=\"${reviewUrl}\" style=\"background:#ea580c;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;display:inline-block;\">Write a Review →</a></p>\n    <h2 style=\"color:#9a3412;\">Need Help?</h2>\n    <p>Our AI assistant Joy is available 24/7 to answer any questions about your order, product usage, or returns. Just open the chat bubble in your dashboard.</p>\n    <hr style=\"margin:24px 0;border:none;border-top:1px solid #fed7aa;\" />\n    <p style=\"font-size:12px;color:#6b7280;\">Dayjoy Wellness Pvt. Ltd. · support@dayjoy.in</p>\n  </div>\n</body></html>`;\nreturn [{ json: { skip: false, html, subject: `How is your Dayjoy order working out?`, recipientEmail: r.customer?.email, orderId: r.id, orderNumber: r.orderNumber, tenantId: r.tenantId, reviewUrl } }];"
+      },
+      "id": "a2e3-0005-followup-compose",
+      "name": "Code: Compose Follow-Up HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.skip }}",
+        "rules": {
+          "rules": [
+            { "value2": "true", "outputKey": "skip", "label": "Skip (not delivered)" },
+            { "value2": "false", "outputKey": "send", "label": "Send Follow-Up" }
+          ]
+        },
+        "fallbackOutput": 1,
+        "options": {}
+      },
+      "id": "a2e3-0006-followup-switch",
+      "name": "Switch: Send or Skip",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "fromEmail": "followup@dayjoy.in",
+        "toEmail": "={{ $('Code: Compose Follow-Up HTML').item.json.recipientEmail }}",
+        "subject": "={{ $('Code: Compose Follow-Up HTML').item.json.subject }}",
+        "emailFormat": "html",
+        "html": "={{ $('Code: Compose Follow-Up HTML').item.json.html }}",
+        "options": {}
+      },
+      "id": "a2e3-0007-followup-send",
+      "name": "Send: Follow-Up Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1320, 60],
+      "credentials": { "smtp": { "id": "smtp-cred-id", "name": "smtp" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"EMAIL\",\n  \"event\": \"delivery_followup_email_sent\",\n  \"orderId\": \"{{ $('Code: Compose Follow-Up HTML').item.json.orderId }}\",\n  \"orderNumber\": \"{{ $('Code: Compose Follow-Up HTML').item.json.orderNumber }}\",\n  \"recipientEmail\": \"{{ $('Code: Compose Follow-Up HTML').item.json.recipientEmail }}\",\n  \"status\": \"SENT\",\n  \"tenantId\": \"{{ $('Code: Compose Follow-Up HTML').item.json.tenantId }}\",\n  \"metadata\": { \"workflow\": \"follow-up-email\", \"delayDays\": 3 }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2e3-0008-followup-audit",
+      "name": "Log: Audit Follow-Up",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 60],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Webhook: order.delivered": { "main": [ [ { "node": "Filter: order.delivered", "type": "main", "index": 0 } ] ] },
+    "Filter: order.delivered": { "main": [ [ { "node": "Wait: 3 Days After Delivery", "type": "main", "index": 0 } ] ] },
+    "Wait: 3 Days After Delivery": { "main": [ [ { "node": "Fetch: Latest Order State", "type": "main", "index": 0 } ] ] },
+    "Fetch: Latest Order State": { "main": [ [ { "node": "Code: Compose Follow-Up HTML", "type": "main", "index": 0 } ] ] },
+    "Code: Compose Follow-Up HTML": { "main": [ [ { "node": "Switch: Send or Skip", "type": "main", "index": 0 } ] ] },
+    "Switch: Send or Skip": { "main": [ [ { "node": "Send: Follow-Up Email", "type": "main", "index": 0 } ] ] },
+    "Send: Follow-Up Email": { "main": [ [ { "node": "Log: Audit Follow-Up", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "email" }, { "name": "orders" }, { "name": "follow-up" }, { "name": "dayjoy" }]
+}

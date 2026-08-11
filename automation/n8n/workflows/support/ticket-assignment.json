@@ -1,0 +1,185 @@
+{
+  "name": "Support — Ticket Assignment / Reassignment",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support/ticket-assignment",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a2s2-0001-ta-webhook",
+      "name": "Webhook: ticket.assigned",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "a2s2-ta-webhook-id"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "cond-event", "leftValue": "={{ $json.body.event }}", "rightValue": "ticket.assigned", "operator": { "type": "string", "operation": "equals" } }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2s2-0002-ta-filter",
+      "name": "Filter: ticket.assigned",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/tickets/{{ $json.body.data.id }}?include=context",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2s2-0003-ta-fetch",
+      "name": "Fetch: Ticket + Context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.all()[0].json.data || $input.all()[0].json;\nconst body = $('Filter: ticket.assigned').item.json.body;\nconst newAssigneeId = body.data.assigneeId || r.assigneeId;\nconst previousAssigneeId = body.data.previousAssigneeId || r.previousAssigneeId;\nreturn [{\n  json: {\n    ticketId: r.id,\n    ticketNumber: r.ticketNumber || r.id,\n    subject: r.subject,\n    category: r.category,\n    priority: r.priority,\n    description: r.description,\n    tenantId: r.tenantId,\n    newAssigneeId,\n    previousAssigneeId,\n    isReassignment: !!previousAssigneeId,\n    customerId: r.customerId,\n    relatedOrders: r.relatedOrders || [],\n    customerHistory: r.customerHistory || []\n  }\n}];"
+      },
+      "id": "a2s2-0004-ta-prep",
+      "name": "Code: Prep Assignment Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"MULTI\",\n  \"event\": \"ticket_assigned_to_you\",\n  \"ticketId\": \"{{ $json.ticketId }}\",\n  \"tenantId\": \"{{ $json.tenantId }}\",\n  \"assigneeId\": \"{{ $json.newAssigneeId }}\",\n  \"template\": \"ticket-assignment\",\n  \"metadata\": {\n    \"ticketNumber\": \"{{ $json.ticketNumber }}\",\n    \"subject\": \"{{ $json.subject }}\",\n    \"priority\": \"{{ $json.priority }}\",\n    \"category\": \"{{ $json.category }}\",\n    \"isReassignment\": {{ $json.isReassignment }},\n    \"ticketUrl\": \"https://app.dayjoy.in/support/tickets/{{ $json.ticketId }}\",\n    \"workflow\": \"ticket-assignment\"\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2s2-0005-ta-notify-new",
+      "name": "Notify: New Assignee",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"MULTI\",\n  \"event\": \"ticket_context_for_assignee\",\n  \"ticketId\": \"{{ $('Code: Prep Assignment Context').item.json.ticketId }}\",\n  \"tenantId\": \"{{ $('Code: Prep Assignment Context').item.json.tenantId }}\",\n  \"assigneeId\": \"{{ $('Code: Prep Assignment Context').item.json.newAssigneeId }}\",\n  \"template\": \"ticket-context\",\n  \"metadata\": {\n    \"customerHistory\": {{ JSON.stringify($('Code: Prep Assignment Context').item.json.customerHistory) }},\n    \"relatedOrders\": {{ JSON.stringify($('Code: Prep Assignment Context').item.json.relatedOrders) }},\n    \"workflow\": \"ticket-assignment\"\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2s2-0006-ta-context",
+      "name": "Send: Context to New Assignee",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/tickets/{{ $('Code: Prep Assignment Context').item.json.ticketId }}/sla/reset",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"reason\": \"TICKET_REASSIGNED\",\n  \"assigneeId\": \"{{ $('Code: Prep Assignment Context').item.json.newAssigneeId }}\",\n  \"previousAssigneeId\": \"{{ $('Code: Prep Assignment Context').item.json.previousAssigneeId || '' }}\",\n  \"resetAt\": \"{{ $now.toISO() }}\",\n  \"resetBy\": \"n8n/ticket-assignment\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2s2-0007-ta-sla",
+      "name": "Update: Reset SLA Timer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "dataType": "boolean",
+        "value1": "={{ $('Code: Prep Assignment Context').item.json.isReassignment }}",
+        "rules": { "rules": [ { "value2": true, "outputKey": 0, "label": "Notify Previous Assignee" } ] },
+        "fallbackOutput": 1,
+        "options": {}
+      },
+      "id": "a2s2-0008-ta-switch",
+      "name": "Switch: Reassignment?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1540, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"MULTI\",\n  \"event\": \"ticket_reassigned_away\",\n  \"ticketId\": \"{{ $('Code: Prep Assignment Context').item.json.ticketId }}\",\n  \"tenantId\": \"{{ $('Code: Prep Assignment Context').item.json.tenantId }}\",\n  \"assigneeId\": \"{{ $('Code: Prep Assignment Context').item.json.previousAssigneeId }}\",\n  \"template\": \"ticket-reassigned-away\",\n  \"metadata\": {\n    \"ticketNumber\": \"{{ $('Code: Prep Assignment Context').item.json.ticketNumber }}\",\n    \"newAssigneeId\": \"{{ $('Code: Prep Assignment Context').item.json.newAssigneeId }}\",\n    \"workflow\": \"ticket-assignment\"\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2s2-0009-ta-notify-prev",
+      "name": "Notify: Previous Assignee",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, -60],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"SYSTEM\",\n  \"event\": \"ticket_assignment_workflow_completed\",\n  \"ticketId\": \"{{ $('Code: Prep Assignment Context').item.json.ticketId }}\",\n  \"status\": \"SUCCESS\",\n  \"tenantId\": \"{{ $('Code: Prep Assignment Context').item.json.tenantId }}\",\n  \"metadata\": {\n    \"workflow\": \"ticket-assignment\",\n    \"isReassignment\": {{ $('Code: Prep Assignment Context').item.json.isReassignment }},\n    \"newAssigneeId\": \"{{ $('Code: Prep Assignment Context').item.json.newAssigneeId }}\",\n    \"previousAssigneeId\": \"{{ $('Code: Prep Assignment Context').item.json.previousAssigneeId || null }}\"\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2s2-0010-ta-audit",
+      "name": "Log: Audit Assignment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Webhook: ticket.assigned": { "main": [ [ { "node": "Filter: ticket.assigned", "type": "main", "index": 0 } ] ] },
+    "Filter: ticket.assigned": { "main": [ [ { "node": "Fetch: Ticket + Context", "type": "main", "index": 0 } ] ] },
+    "Fetch: Ticket + Context": { "main": [ [ { "node": "Code: Prep Assignment Context", "type": "main", "index": 0 } ] ] },
+    "Code: Prep Assignment Context": { "main": [ [ { "node": "Notify: New Assignee", "type": "main", "index": 0 } ] ] },
+    "Notify: New Assignee": { "main": [ [ { "node": "Send: Context to New Assignee", "type": "main", "index": 0 } ] ] },
+    "Send: Context to New Assignee": { "main": [ [ { "node": "Update: Reset SLA Timer", "type": "main", "index": 0 } ] ] },
+    "Update: Reset SLA Timer": { "main": [ [ { "node": "Switch: Reassignment?", "type": "main", "index": 0 } ] ] },
+    "Switch: Reassignment?": { "main": [ [ { "node": "Notify: Previous Assignee", "type": "main", "index": 0 } ] ] },
+    "Notify: Previous Assignee": { "main": [ [ { "node": "Log: Audit Assignment", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "support" }, { "name": "tickets" }, { "name": "assignment" }, { "name": "dayjoy" }]
+}

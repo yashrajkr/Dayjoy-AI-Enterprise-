@@ -1,0 +1,769 @@
+# Kubernetes Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dayjoyai
+  labels:
+    app.kubernetes.io/name: dayjoyai
+    app.kubernetes.io/part-of: dayjoyai-platform
+---
+# Backend ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: dayjoyai
+data:
+  ENVIRONMENT: "production"
+  DEBUG: "false"
+  API_V1_PREFIX: "/api/v1"
+  # NOTE: DATABASE_URL is intentionally omitted here — it contains
+  # credentials and is sourced from the `backend-secrets` Secret below
+  # (synced from AWS Secrets Manager via ExternalSecret).
+  REDIS_URL: "redis://redis:6379/0"
+  VECTOR_DB_PROVIDER: "qdrant"
+  QDRANT_URL: "http://qdrant:6333"
+  EMBEDDING_PROVIDER: "openai"
+  EMBEDDING_MODEL: "text-embedding-3-small"
+  EMBEDDING_DIMENSION: "1536"
+  VOICE_PROVIDER: "vapi"
+  TELEPHONY_PROVIDER: "twilio"
+  WHATSAPP_PROVIDER: "meta_cloud"
+  EMAIL_PROVIDER: "resend"
+  SMS_PROVIDER: "twilio"
+  ENABLE_METRICS: "true"
+  PROMETHEUS_ENABLED: "true"
+  METRICS_PATH: "/metrics"
+  ENABLE_TRACING: "false"
+  ENABLE_SENTRY: "false"
+  LOG_LEVEL: "INFO"
+  LOG_FORMAT: "json"
+---
+# SecretStore — AWS Secrets Manager backend for the External Secrets Operator.
+# Requires ESO to be installed in the cluster. Uses IRSA (no static AWS keys).
+apiVersion: external-secrets.io/v1beta1
+kind: SecretStore
+metadata:
+  name: aws-secrets-manager
+  namespace: dayjoyai
+spec:
+  provider:
+    aws:
+      service: SecretsManager
+      region: ap-south-1
+      auth:
+        jwt:
+          serviceAccountRef:
+            name: dayjoy-backend
+---
+# ServiceAccount for backend pods. Annotated with an IRSA role ARN so pods can
+# pull secrets from AWS Secrets Manager without long-lived credentials.
+# Replace ACCOUNT_ID with the real AWS account ID at deploy time (kustomize
+# overlay or Helm set).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dayjoy-backend
+  namespace: dayjoyai
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/dayjoy-backend-role
+---
+# Backend Secrets — synced from AWS Secrets Manager by ESO. NEVER store
+# plaintext secrets in Git. The target Secret `backend-secrets` is created
+# in-cluster with creationPolicy: Owner so ESO manages its lifecycle.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: backend-secrets
+  namespace: dayjoyai
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-secrets-manager
+    kind: SecretStore
+  target:
+    name: backend-secrets
+    creationPolicy: Owner
+    deletionPolicy: Retain
+  data:
+    - secretKey: SECRET_KEY
+      remoteRef:
+        key: dayjoy/prod/app
+        property: secret_key
+    - secretKey: DATABASE_URL
+      remoteRef:
+        key: dayjoy/prod/database
+        property: url
+    - secretKey: JWT_SECRET
+      remoteRef:
+        key: dayjoy/prod/auth
+        property: jwt_secret
+    - secretKey: OPENAI_API_KEY
+      remoteRef:
+        key: dayjoy/prod/ai
+        property: openai_api_key
+    - secretKey: ANTHROPIC_API_KEY
+      remoteRef:
+        key: dayjoy/prod/ai
+        property: anthropic_api_key
+    - secretKey: GROQ_API_KEY
+      remoteRef:
+        key: dayjoy/prod/ai
+        property: groq_api_key
+    - secretKey: GEMINI_API_KEY
+      remoteRef:
+        key: dayjoy/prod/ai
+        property: gemini_api_key
+    - secretKey: VAPI_API_KEY
+      remoteRef:
+        key: dayjoy/prod/voice
+        property: vapi_api_key
+    - secretKey: VAPI_PUBLIC_KEY
+      remoteRef:
+        key: dayjoy/prod/voice
+        property: vapi_public_key
+    - secretKey: TWILIO_ACCOUNT_SID
+      remoteRef:
+        key: dayjoy/prod/telephony
+        property: twilio_account_sid
+    - secretKey: TWILIO_AUTH_TOKEN
+      remoteRef:
+        key: dayjoy/prod/telephony
+        property: twilio_auth_token
+    - secretKey: TWILIO_PHONE_NUMBER
+      remoteRef:
+        key: dayjoy/prod/telephony
+        property: twilio_phone_number
+    - secretKey: WHATSAPP_ACCESS_TOKEN
+      remoteRef:
+        key: dayjoy/prod/whatsapp
+        property: access_token
+    - secretKey: WHATSAPP_PHONE_NUMBER_ID
+      remoteRef:
+        key: dayjoy/prod/whatsapp
+        property: phone_number_id
+    - secretKey: WHATSAPP_VERIFY_TOKEN
+      remoteRef:
+        key: dayjoy/prod/whatsapp
+        property: verify_token
+    - secretKey: META_APP_SECRET
+      remoteRef:
+        key: dayjoy/prod/whatsapp
+        property: app_secret
+    - secretKey: RESEND_API_KEY
+      remoteRef:
+        key: dayjoy/prod/email
+        property: resend_api_key
+    - secretKey: SENDGRID_API_KEY
+      remoteRef:
+        key: dayjoy/prod/email
+        property: sendgrid_api_key
+    - secretKey: FCM_SERVER_KEY
+      remoteRef:
+        key: dayjoy/prod/notifications
+        property: fcm_server_key
+    - secretKey: SENTRY_DSN
+      remoteRef:
+        key: dayjoy/prod/observability
+        property: sentry_dsn
+---
+# Backend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: dayjoyai
+  labels:
+    app: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      serviceAccountName: dayjoy-backend
+      securityContext:
+        # Pod-level: run as non-root, UID/GID 1000, fsGroup for volume perms.
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: dayjoyai-backend:latest
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secrets
+          securityContext:
+            # Container-level: harden the surface as much as possible.
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 30
+          # readOnlyRootFilesystem requires a writable /tmp for Node/NestJS
+          # internals (e.g. multer uploads, os.tmpdir()).
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      terminationGracePeriodSeconds: 60
+---
+# Backend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: dayjoyai
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: http
+  type: ClusterIP
+---
+# Backend PodDisruptionBudget — keep at least 2 replicas available during
+# voluntary disruptions (node drain, cluster-autoscaler, etc.).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend-pdb
+  namespace: dayjoyai
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: backend
+---
+# Frontend PodDisruptionBudget — keep at least 1 replica available.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend-pdb
+  namespace: dayjoyai
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: frontend
+---
+# Backend HPA (Horizontal Pod Autoscaler)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-hpa
+  namespace: dayjoyai
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+# Frontend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: dayjoyai
+  labels:
+    app: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      serviceAccountName: dayjoy-backend
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: frontend
+          image: dayjoyai-frontend:latest
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: NEXT_PUBLIC_API_URL
+              value: "https://api.dayjoyai.com/api/v1"
+            - name: NEXT_PUBLIC_APP_NAME
+              value: "Dayjoy AI Platform"
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          # Next.js writes ISR/cache & tmp files; mount writable emptyDirs.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: next-cache
+              mountPath: /app/.next/cache
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: next-cache
+          emptyDir: {}
+---
+# Frontend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: dayjoyai
+spec:
+  selector:
+    app: frontend
+  ports:
+    - port: 3000
+      targetPort: 3000
+      name: http
+  type: ClusterIP
+---
+# Frontend HPA
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: frontend-hpa
+  namespace: dayjoyai
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: frontend
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+---
+# Ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dayjoyai-ingress
+  namespace: dayjoyai
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+spec:
+  tls:
+    - hosts:
+        - dayjoyai.com
+        - api.dayjoyai.com
+      secretName: dayjoyai-tls
+  rules:
+    - host: api.dayjoyai.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8000
+    - host: dayjoyai.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 3000
+---
+# Network Policy (restrict traffic between pods)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-network-policy
+  namespace: dayjoyai
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app: qdrant
+      ports:
+        - protocol: TCP
+          port: 6333
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow HTTPS to external APIs
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# PostgreSQL StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: dayjoyai
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg16
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: db-secrets
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-secrets
+                  key: password
+            - name: POSTGRES_DB
+              value: dayjoyai
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 50Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: dayjoyai
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+---
+# Redis Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: dayjoyai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      securityContext:
+        # redis:7-alpine ships a `redis` user (UID/GID 999).
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          command: ["redis-server", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru", "--appendonly", "yes"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: dayjoyai
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-pvc
+  namespace: dayjoyai
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+# Qdrant Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qdrant
+  namespace: dayjoyai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: qdrant
+  template:
+    metadata:
+      labels:
+        app: qdrant
+    spec:
+      securityContext:
+        # Qdrant official image runs as root by default; we still drop ALL
+        # capabilities and forbid privilege escalation. Running as non-root
+        # would require a custom image, tracked as a follow-up hardening item.
+        seccompProfile:
+          type: RuntimeDefault
+        fsGroup: 1000
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:v1.11.0
+          ports:
+            - containerPort: 6333
+              name: http
+            - containerPort: 6334
+              name: grpc
+          env:
+            - name: QDRANT__LOG_LEVEL
+              value: INFO
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: qdrant-data
+              mountPath: /qdrant/storage
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+      volumes:
+        - name: qdrant-data
+          persistentVolumeClaim:
+            claimName: qdrant-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+  namespace: dayjoyai
+spec:
+  selector:
+    app: qdrant
+  ports:
+    - port: 6333
+      name: http
+    - port: 6334
+      name: grpc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qdrant-pvc
+  namespace: dayjoyai
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi

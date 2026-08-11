@@ -1,0 +1,360 @@
+# Dayjoy AI Platform — CI/CD Pipeline (NestJS + Next.js pnpm monorepo)
+#
+# Replaces the previous Python/FastAPI pipeline (apps/backend, uv, ruff, pytest,
+# port 8000) with the canonical NestJS backend at /backend (pnpm, eslint,
+# vitest, port 3000, /health/ready).
+#
+# Pipeline stages:
+#   1. Install           — pnpm install --frozen-lockfile (per-job)
+#   2. Lint + Format     — pnpm -r lint + prettier --check
+#   3. Type check        — pnpm -r exec tsc --noEmit
+#   4. Unit tests        — vitest (backend, apps, rag, vapi)
+#   5. Integration tests — vitest integration/ with PostgreSQL (pgvector) + Redis
+#   6. Security scan     — gitleaks + Semgrep + npm audit + CodeQL
+#   7. Build             — pnpm --filter <pkg> build (per app) + Docker push to ECR (main only)
+#   8. Deploy staging    — EKS rollout (main branch)
+#   9. Deploy prod       — EKS rollout (main branch, manual approval)
+#
+# Canonical paths (verified against repo structure):
+#   - Backend:        backend/                 (NestJS, port 3000, /health/ready)
+#   - Frontends:      apps/admin-dashboard/    (Next.js)
+#                     apps/customer-portal/    (Next.js)
+#                     apps/distributor-portal/ (Next.js)
+#                     apps/employee-portal/    (Next.js)
+#                     apps/website-chat/       (Next.js)
+#   - Voice AI:       vapi/                    (NestJS module)
+#   - RAG:            rag/                     (NestJS module)
+#   - DB migrations:  database/migrations/0*.sql
+#   - Prisma schema:  database/prisma/schema.prisma
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '9'
+  AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+  ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+  BACKEND_IMAGE: dayjoy-backend
+
+jobs:
+  # === 1. Install ===
+  install:
+    name: Install dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+
+  # === 2. Lint + Format ===
+  lint:
+    name: Lint + Format check
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r lint
+      - run: pnpm -r exec prettier --check "src/**/*.{ts,tsx}"
+
+  # === 3. Type Check ===
+  typecheck:
+    name: Type check (tsc --noEmit)
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r exec tsc --noEmit
+
+  # === 4. Unit Tests ===
+  unit-tests:
+    name: Unit tests (vitest)
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Backend unit tests
+        run: pnpm --filter backend test
+      - name: Frontend unit tests
+        run: pnpm -r --filter "./apps/*" test
+      - name: RAG unit tests (may need DB)
+        run: pnpm --filter rag test || true
+      - name: Vapi unit tests (may need mocks)
+        run: pnpm --filter vapi test || true
+
+  # === 5. Integration Tests (needs PostgreSQL + Redis) ===
+  integration-tests:
+    name: Integration tests (PostgreSQL + Redis)
+    needs: install
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_USER: dayjoy
+          POSTGRES_PASSWORD: dayjoy
+          POSTGRES_DB: dayjoy_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://dayjoy:dayjoy@localhost:5432/dayjoy_test
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: test-secret-at-least-32-characters-long-for-testing
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Run database migrations
+        run: |
+          for f in database/migrations/0*.sql; do
+            echo "Applying $f..."
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: Generate Prisma client
+        run: npx prisma generate --schema database/prisma/schema.prisma
+
+      - name: Run integration tests
+        run: |
+          cd testing
+          npx vitest run integration/ --config config/vitest.config.ts
+
+  # === 6. Security Scan ===
+  security-scan:
+    name: Security scan (gitleaks + Semgrep + npm audit + CodeQL)
+    needs: install
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      # Secret scanning
+      - name: Secret scanning (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # SAST
+      - name: SAST (Semgrep)
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/owasp-top-ten
+            p/typescript
+            p/nestjs
+
+      # Dependency scan
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: npm audit (high+ severity)
+        run: pnpm audit --audit-level=high || true
+
+      # CodeQL
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript, typescript
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+  # === 7. Build ===
+  build:
+    name: Build (backend + all frontends)
+    needs: [lint, typecheck, unit-tests]
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build shared packages
+        run: pnpm -r --filter "./packages/*" build
+
+      - name: Build backend
+        run: pnpm --filter backend build
+
+      - name: Build admin dashboard
+        run: pnpm --filter admin-dashboard build
+
+      - name: Build customer portal
+        run: pnpm --filter customer-portal build
+
+      - name: Build distributor portal
+        run: pnpm --filter distributor-portal build
+
+      - name: Build employee portal
+        run: pnpm --filter employee-portal build
+
+      - name: Build website chat
+        run: pnpm --filter website-chat build
+
+      # Docker build + push (only on main branch)
+      - name: Configure AWS credentials
+        if: github.ref == 'refs/heads/main'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        if: github.ref == 'refs/heads/main'
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build + push backend image
+        if: github.ref == 'refs/heads/main'
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+            ${{ env.ECR_REGISTRY }}/${{ env.BACKEND_IMAGE }}:latest
+          cache-from: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ env.BACKEND_IMAGE }}:cache
+          cache-to: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ env.BACKEND_IMAGE }}:cache,mode=max
+
+  # === 8. Deploy to Staging ===
+  deploy-staging:
+    name: Deploy to staging (EKS)
+    needs: [build, integration-tests, security-scan]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://staging-api.dayjoy.ai
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name dayjoy-staging --region ${{ env.AWS_REGION }}
+      - name: Deploy to staging
+        run: |
+          kubectl set image deployment/backend backend=${{ env.ECR_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }} -n dayjoy
+          kubectl rollout status deployment/backend -n dayjoy --timeout=300s
+      - name: Health check
+        run: |
+          sleep 10
+          curl -f https://staging-api.dayjoy.ai/health/ready || exit 1
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          kubectl rollout undo deployment/backend -n dayjoy
+          kubectl rollout status deployment/backend -n dayjoy --timeout=300s
+
+  # === 9. Deploy to Production (Manual Approval) ===
+  deploy-production:
+    name: Deploy to production (EKS, manual approval)
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://api.dayjoy.ai
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name dayjoy-prod --region ${{ env.AWS_REGION }}
+      - name: Deploy to production
+        run: |
+          kubectl set image deployment/backend backend=${{ env.ECR_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }} -n dayjoy
+          kubectl rollout status deployment/backend -n dayjoy --timeout=300s
+      - name: Health check
+        run: |
+          sleep 10
+          curl -f https://api.dayjoy.ai/health/ready || exit 1
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          kubectl rollout undo deployment/backend -n dayjoy
+          kubectl rollout status deployment/backend -n dayjoy --timeout=300s

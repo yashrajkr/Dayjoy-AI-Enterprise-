@@ -1,0 +1,204 @@
+# Dayjoy AI Platform — Docker Compose (Production)
+# Full stack with monitoring, vector DB, and production settings
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml logs -f
+#   docker compose -f docker-compose.prod.yml down
+
+services:
+  # ===== PostgreSQL with pgvector =====
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: dayjoyai-postgres-prod
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dayjoy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in production}
+      POSTGRES_DB: ${POSTGRES_DB:-dayjoyai}
+      POSTGRES_TEST_DB: ${POSTGRES_TEST_DB:-dayjoyai_test}
+    ports:
+      - "5432:5432"
+    volumes:
+      - dayjoyai_pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d
+      - ./docker/postgres/backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dayjoy} -d ${POSTGRES_DB:-dayjoyai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - dayjoyai-prod
+
+  # ===== Redis =====
+  redis:
+    image: redis:7-alpine
+    container_name: dayjoyai-redis-prod
+    restart: always
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - dayjoyai_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dayjoyai-prod
+
+  # ===== Qdrant Vector Database =====
+  qdrant:
+    image: qdrant/qdrant:v1.11.0
+    container_name: dayjoyai-qdrant-prod
+    restart: always
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    environment:
+      - QDRANT__LOG_LEVEL=INFO
+    volumes:
+      - dayjoyai_qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - dayjoyai-prod
+
+  # ===== Backend (FastAPI) =====
+  backend:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    container_name: dayjoyai-backend-prod
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-dayjoy}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-dayjoyai}
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required in production}
+      - VECTOR_DB_PROVIDER=qdrant
+      - QDRANT_URL=http://qdrant:6333
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-openai}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-1536}
+      - VOICE_PROVIDER=${VOICE_PROVIDER:-none}
+      - VAPI_API_KEY=${VAPI_API_KEY:-}
+      - TELEPHONY_PROVIDER=${TELEPHONY_PROVIDER:-none}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
+      - TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER:-}
+      - WHATSAPP_PROVIDER=${WHATSAPP_PROVIDER:-none}
+      - WHATSAPP_ACCESS_TOKEN=${WHATSAPP_ACCESS_TOKEN:-}
+      - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID:-}
+      - WHATSAPP_VERIFY_TOKEN=${WHATSAPP_VERIFY_TOKEN:-}
+      - META_APP_SECRET=${META_APP_SECRET:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - EMAIL_PROVIDER=${EMAIL_PROVIDER:-resend}
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - ENABLE_SENTRY=${ENABLE_SENTRY:-false}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - ENABLE_TRACING=${ENABLE_TRACING:-false}
+      - OTEL_EXPORTER_ENDPOINT=${OTEL_EXPORTER_ENDPOINT:-}
+      - PROMETHEUS_ENABLED=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    command: >
+      sh -c "
+        alembic upgrade head &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4 --no-access-log
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - dayjoyai-prod
+
+  # ===== Frontend (Next.js) =====
+  frontend:
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile
+    container_name: dayjoyai-frontend-prod
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+      - NEXT_PUBLIC_APP_NAME=Dayjoy AI Platform
+    depends_on:
+      - backend
+    networks:
+      - dayjoyai-prod
+
+  # ===== Prometheus (Monitoring) =====
+  prometheus:
+    image: prom/prometheus:v2.54.0
+    container_name: dayjoyai-prometheus
+    restart: always
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/prometheus/prometheus-rules.yaml:/etc/prometheus/rules.yml
+      - dayjoyai_prometheus:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+    networks:
+      - dayjoyai-prod
+
+  # ===== Grafana (Dashboards) =====
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: dayjoyai-grafana
+    restart: always
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required in production}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - dayjoyai_grafana:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+    networks:
+      - dayjoyai-prod
+
+volumes:
+  dayjoyai_pgdata:
+    driver: local
+  dayjoyai_redis:
+    driver: local
+  dayjoyai_qdrant:
+    driver: local
+  dayjoyai_prometheus:
+    driver: local
+  dayjoyai_grafana:
+    driver: local
+
+networks:
+  dayjoyai-prod:
+    name: dayjoyai-prod-network

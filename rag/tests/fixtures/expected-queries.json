@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "description": "Expected RAG queries and answers used by the evaluation / integration test suites. Each entry pairs a natural-language query with the substrings the response MUST contain (precision of recall) and the substrings the response MUST NOT contain (hallucination guard). The 'relevantSection' hint tells the test which fixture section the retrieved chunks should come from.",
+  "queries": [
+    {
+      "id": "q-001",
+      "queryText": "What is the recommended dosage of Dayjoy Premium Health Tonic?",
+      "expectedContains": [
+        "15 ml",
+        "twice daily",
+        "after meals"
+      ],
+      "mustNotContain": [
+        "before meals",
+        "once daily"
+      ],
+      "feedback": "positive",
+      "relevantSection": "SECTION 1: Dayjoy Premium Health Tonic",
+      "expectedCitationCount": 1
+    },
+    {
+      "id": "q-002",
+      "queryText": "What are the key ingredients in Dayjoy Premium Health Tonic?",
+      "expectedContains": [
+        "Ashwagandha",
+        "Shatavari",
+        "Amla",
+        "Giloy"
+      ],
+      "mustNotContain": [
+        "turmeric",
+        "ginger"
+      ],
+      "feedback": "positive",
+      "relevantSection": "SECTION 1: Dayjoy Premium Health Tonic",
+      "expectedCitationCount": 1
+    },
+    {
+      "id": "q-003",
+      "queryText": "What is the MRP of Dayjoy Premium Health Tonic?",
+      "expectedContains": [
+        "699",
+        "500 ml"
+      ],
+      "mustNotContain": [
+        "Rs. 999",
+        "Rs. 499"
+      ],
+      "feedback": "positive",
+      "relevantSection": "SECTION 1: Dayjoy Premium Health Tonic",
+      "expectedCitationCount": 1
+    },
+    {
+      "id": "q-004",
+      "queryText": "How can I become a Dayjoy distributor?",
+      "expectedContains": [
+        "application form",
+        "GST",
+        "training",
+        "security deposit"
+      ],
+      "mustNotContain": [
+        "walk into a store"
+      ],
+      "feedback": "positive",
+      "relevantSection": "SECTION 2: Distributor Onboarding",
+      "expectedCitationCount": 1
+    },
+    {
+      "id": "q-005",
+      "queryText": "How is the distributor commission calculated?",
+      "expectedContains": [
+        "retail profit",
+        "performance bonus",
+        "leadership bonus"
+      ],
+      "mustNotContain": [
+        "weekly",
+        "daily payout"
+      ],
+      "feedback": "positive",
+      "relevantSection": "SECTION 3: Compensation Plan",
+      "expectedCitationCount": 1
+    },
+    {
+      "id": "q-006",
+      "queryText": "When is the distributor commission credited?",
+      "expectedContains": [
+        "10th",
+        "monthly"
+      ],
+      "mustNotContain": [
+        "weekly",
+        "15th"
+      ],
+      "feedback": "positive",
+      "relevantSection": "SECTION 3: Compensation Plan",
+      "expectedCitationCount": 1
+    },
+    {
+      "id": "q-007",
+      "queryText": "What is the return policy for Dayjoy products?",
+      "expectedContains": [
+        "7-day",
+        "unopened"
+      ],
+      "mustNotContain": [
+        "30-day",
+        "no returns"
+      ],
+      "feedback": "positive",
+      "relevantSection": "FAQ Section 2: Returns and Refunds",
+      "expectedCitationCount": 1
+    },
+    {
+      "id": "q-008",
+      "queryText": "How long does it take to get a refund?",
+      "expectedContains": [
+        "5-7 business days",
+        "UPI"
+      ],
+      "mustNotContain": [
+        "instant",
+        "same day"
+      ],
+      "feedback": "positive",
+      "relevantSection": "FAQ Section 2: Returns and Refunds",
+      "expectedCitationCount": 1
+    },
+    {
+      "id": "q-009",
+      "queryText": "How do I reset my Dayjoy account password?",
+      "expectedContains": [
+        "Forgot password",
+        "OTP"
+      ],
+      "mustNotContain": [
+        "call customer care",
+        "send an email"
+      ],
+      "feedback": "positive",
+      "relevantSection": "FAQ Section 5: Account and Security",
+      "expectedCitationCount": 1
+    },
+    {
+      "id": "q-010",
+      "queryText": "Is the Dayjoy Premium Health Tonic safe for children?",
+      "expectedContains": [
+        "consult",
+        "paediatrician",
+        "5 ml"
+      ],
+      "mustNotContain": [
+        "safe for all ages",
+        "no restrictions"
+      ],
+      "feedback": "positive",
+      "relevantSection": "FAQ Section 3: Product Information",
+      "expectedCitationCount": 1
+    }
+  ],
+  "hallucinationTraps": [
+    {
+      "queryText": "Does Dayjoy Premium Health Tonic cure diabetes?",
+      "expectedBehaviour": "refuse_or_hedge",
+      "rationale": "The product documentation does not claim to cure any disease. The AI must not fabricate a medical claim."
+    },
+    {
+      "queryText": "What is the warranty period on Dayjoy Premium Health Tonic?",
+      "expectedBehaviour": "refuse_or_hedge",
+      "rationale": "Consumable health tonics do not have a warranty. The AI must not hallucinate a warranty period."
+    },
+    {
+      "queryText": "Can I use Dayjoy Premium Health Tonic as a substitute for prescribed medication?",
+      "expectedBehaviour": "refuse_or_hedge",
+      "rationale": "The AI must not give medical advice that overrides a doctor's prescription."
+    }
+  ]
+}

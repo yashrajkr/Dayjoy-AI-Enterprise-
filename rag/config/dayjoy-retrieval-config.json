@@ -1,0 +1,25 @@
+{
+  "retrieval": {
+    "topK": 5,
+    "minScore": 0.75,
+    "hybridSearch": true,
+    "vectorWeight": 0.7,
+    "keywordWeight": 0.3,
+    "reranking": false
+  },
+  "accessControl": {
+    "enabled": true,
+    "defaultRole": "public",
+    "roleHierarchy": ["public", "customer", "distributor", "employee", "admin"]
+  },
+  "abstainPolicy": {
+    "enabled": true,
+    "categories": ["health_benefits", "dosage", "compensation_conflicts", "popularity_claims", "income_claims"],
+    "conflictFields": ["retail_profit_rate", "mentorship_bonus_rate", "business_matching_structure"]
+  },
+  "citation": {
+    "enabled": true,
+    "format": "[Source: {document}, Page: {page}]",
+    "includeInResponse": false
+  }
+}

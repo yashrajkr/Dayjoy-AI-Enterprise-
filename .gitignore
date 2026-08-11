@@ -1,0 +1,99 @@
+# =====================================================
+# Dayjoy AI Enterprise — .gitignore
+# =====================================================
+
+# ---------- Node ----------
+node_modules/
+.pnpm-store/
+dist/
+build/
+*.tsbuildinfo
+.next/
+.nuxt/
+.turbo/
+.cache/
+
+# ---------- Env & secrets ----------
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+*.pem
+*.key
+*.crt
+secrets/
+
+# ---------- Database ----------
+*.db
+*.sqlite
+*.sqlite3
+.coverage
+htmlcov/
+database/backups/*.dump
+database/backups/*.sql.gz
+
+# ---------- Logs ----------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------- IDE ----------
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ---------- OS ----------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---------- Testing ----------
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+
+# ---------- Build artifacts ----------
+*.tar.gz
+*.zip
+*.tgz
+
+# ---------- Docker ----------
+docker-compose.override.yml
+
+# ---------- Python (for FastAPI reference + load tests) ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---------- Terraform ----------
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# ---------- Kubernetes ----------
+*.kubeconfig
+
+# ---------- Misc ----------
+.tmp/
+tmp/
+*.local

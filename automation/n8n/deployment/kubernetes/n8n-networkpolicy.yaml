@@ -1,0 +1,245 @@
+# =============================================================================
+# Dayjoy n8n — NetworkPolicy
+# Zero-trust: explicit allow-list for ingress + egress per pod.
+# Requires a CNI that supports NetworkPolicy (Calico, Cilium, AWS VPC CNI).
+# =============================================================================
+
+# Default deny all ingress + egress in the namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: dayjoy-n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/part-of: dayjoy-ai-enterprise
+spec:
+  podSelector: {}  # select all pods in the namespace
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# n8n-main: allow ingress from the nginx-ingress namespace only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: n8n-main-ingress
+  namespace: dayjoy-n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: main
+    app.kubernetes.io/part-of: dayjoy-ai-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: n8n
+      app.kubernetes.io/component: main
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow HTTP from the ingress-nginx namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 5678
+    # Allow Prometheus scraping from the monitoring namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 5678
+---
+# n8n-main: allow egress to Postgres, Redis, Dayjoy API, external providers
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: n8n-main-egress
+  namespace: dayjoy-n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: main
+    app.kubernetes.io/part-of: dayjoy-ai-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: n8n
+      app.kubernetes.io/component: main
+  policyTypes:
+    - Egress
+  egress:
+    # DNS resolution (kube-system kube-dns)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Postgres (in dayjoy-platform namespace)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: dayjoy-platform
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Redis (in dayjoy-platform namespace)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: dayjoy-platform
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Dayjoy backend API (in dayjoy-platform namespace)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: dayjoy-platform
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: backend-api
+      ports:
+        - protocol: TCP
+          port: 8000
+    # Prometheus pushgateway (in monitoring namespace)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pushgateway
+      ports:
+        - protocol: TCP
+          port: 9091
+    # External HTTPS — WhatsApp, SendGrid, Razorpay, Google, Slack, PagerDuty
+    # (uses a namespace-less selector with IPBlock via FQDN egress proxy in production)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8        # block internal ranges from being abused
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# n8n-worker: NO inbound (headless scraping only via Prometheus service)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: n8n-worker-ingress
+  namespace: dayjoy-n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: dayjoy-ai-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: n8n
+      app.kubernetes.io/component: worker
+  policyTypes:
+    - Ingress
+  ingress:
+    # Only Prometheus may scrape worker /metrics
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 5678
+---
+# n8n-worker: same egress allow-list as n8n-main
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: n8n-worker-egress
+  namespace: dayjoy-n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: dayjoy-ai-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: n8n
+      app.kubernetes.io/component: worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: dayjoy-platform
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: dayjoy-platform
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: dayjoy-platform
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: backend-api
+      ports:
+        - protocol: TCP
+          port: 8000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pushgateway
+      ports:
+        - protocol: TCP
+          port: 9091
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443

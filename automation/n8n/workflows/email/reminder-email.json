@@ -1,0 +1,100 @@
+{
+  "name": "Email — Appointment Reminder (Daily 24hr)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "cronExpression", "expression": "0 8 * * *" } ] }
+      },
+      "id": "a2e4-0001-reminder-schedule",
+      "name": "Schedule: Daily 8 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/appointments/upcoming?windowHours=24",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2e4-0002-reminder-fetch",
+      "name": "Fetch: Appointments Next 24hr",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "id": "a2e4-0003-reminder-split",
+      "name": "Split: Per Appointment",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const a = $input.all()[0].json;\nconst startDate = new Date(a.startTime || a.start || a.scheduledAt);\nconst fmt = (d) => d.toLocaleString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });\nconst meetingLink = a.meetingLink || a.location || (a.type === 'ONLINE' ? 'https://meet.dayjoy.in/' + a.id : '');\nconst locationLine = a.type === 'ONLINE'\n  ? `<p><strong>Join Online:</strong> <a href=\"${meetingLink}\">${meetingLink}</a></p>`\n  : `<p><strong>Location:</strong> ${a.location || 'To be confirmed'}</p>`;\nconst html = `\n<!doctype html><html><body style=\"font-family:Arial,Helvetica,sans-serif;color:#1f2937;background:#fff7ed;margin:0;padding:0;\">\n  <div style=\"max-width:560px;margin:0 auto;padding:32px;\">\n    <h1 style=\"color:#ea580c;\">⏰ Appointment Reminder</h1>\n    <p>Hi ${a.customerName || 'Customer'},</p>\n    <p>This is a friendly reminder for your upcoming Dayjoy appointment.</p>\n    <table style=\"width:100%;border-collapse:collapse;margin:16px 0;\">\n      <tr><td style=\"padding:8px;background:#ffedd5;\"><strong>When:</strong></td><td style=\"padding:8px;background:#fff;\">${fmt(startDate)}</td></tr>\n      <tr><td style=\"padding:8px;background:#ffedd5;\"><strong>With:</strong></td><td style=\"padding:8px;background:#fff;\">${a.employeeName || a.assigneeName || 'Dayjoy Team'}</td></tr>\n      <tr><td style=\"padding:8px;background:#ffedd5;\"><strong>Agenda:</strong></td><td style=\"padding:8px;background:#fff;\">${a.title || a.agenda || 'Consultation'}</td></tr>\n    </table>\n    ${locationLine}\n    <p style=\"margin-top:16px;\"><a href=\"https://app.dayjoy.in/appointments/${a.id}\" style=\"background:#ea580c;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;display:inline-block;\">Manage Appointment →</a></p>\n    <hr style=\"margin:24px 0;border:none;border-top:1px solid #fed7aa;\" />\n    <p style=\"font-size:12px;color:#6b7280;\">Dayjoy Wellness Pvt. Ltd. · support@dayjoy.in</p>\n  </div>\n</body></html>`;\nreturn [{\n  json: {\n    html,\n    subject: `Reminder: Appointment on ${fmt(startDate)}`,\n    customerEmail: a.customerEmail,\n    employeeEmail: a.employeeEmail,\n    appointmentId: a.id,\n    tenantId: a.tenantId\n  }\n}];"
+      },
+      "id": "a2e4-0004-reminder-compose",
+      "name": "Code: Compose Reminder HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "fromEmail": "appointments@dayjoy.in",
+        "toEmail": "={{ $json.customerEmail }}, {{ $json.employeeEmail }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "a2e4-0005-reminder-send",
+      "name": "Send: Reminder (Customer+Employee)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [880, 0],
+      "credentials": { "smtp": { "id": "smtp-cred-id", "name": "smtp" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"EMAIL\",\n  \"event\": \"appointment_reminder_sent\",\n  \"appointmentId\": \"{{ $json.appointmentId }}\",\n  \"recipientEmails\": [\"{{ $json.customerEmail }}\", \"{{ $json.employeeEmail }}\"],\n  \"status\": \"SENT\",\n  \"tenantId\": \"{{ $json.tenantId }}\",\n  \"metadata\": { \"workflow\": \"reminder-email\", \"windowHours\": 24 }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2e4-0006-reminder-audit",
+      "name": "Log: Audit Reminder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Schedule: Daily 8 AM": { "main": [ [ { "node": "Fetch: Appointments Next 24hr", "type": "main", "index": 0 } ] ] },
+    "Fetch: Appointments Next 24hr": { "main": [ [ { "node": "Split: Per Appointment", "type": "main", "index": 0 } ] ] },
+    "Split: Per Appointment": { "main": [ [ { "node": "Code: Compose Reminder HTML", "type": "main", "index": 0 } ] ] },
+    "Code: Compose Reminder HTML": { "main": [ [ { "node": "Send: Reminder (Customer+Employee)", "type": "main", "index": 0 } ] ] },
+    "Send: Reminder (Customer+Employee)": { "main": [ [ { "node": "Log: Audit Reminder", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "email" }, { "name": "calendar" }, { "name": "reminder" }, { "name": "dayjoy" }]
+}

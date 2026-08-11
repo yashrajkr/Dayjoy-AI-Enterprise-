@@ -1,0 +1,172 @@
+{
+  "name": "AI — Knowledge Update Trigger",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai/knowledge-update",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a2ai1-0001-ku-webhook",
+      "name": "Webhook: knowledge.document_created",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "a2ai1-ku-webhook-id"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.all()[0].json.body;\nif (body.event !== 'knowledge.document_created') return [];\nreturn [{ json: { documentId: body.data.id, tenantId: body.data.tenantId, sourceId: body.data.sourceId, title: body.data.title, status: body.data.status || 'PENDING', createdAt: body.data.createdAt } }];"
+      },
+      "id": "a2ai1-0002-ku-prep",
+      "name": "Code: Prep Document Info",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "resumeWebhook": "a2ai1-ku-resume-ready",
+        "options": {}
+      },
+      "id": "a2ai1-0003-ku-wait",
+      "name": "Wait: Document READY Status",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [440, 0],
+      "webhookId": "a2ai1-ku-resume-ready"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/knowledge/documents/{{ $('Code: Prep Document Info').item.json.documentId }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2ai1-0004-ku-verify",
+      "name": "Verify: Document is READY",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.all()[0].json.data || $input.all()[0].json;\nconst status = (r.status || '').toUpperCase();\nif (status !== 'READY') return [{ json: { skip: true, reason: `Document status is ${status}` } }];\nreturn [{ json: { skip: false, documentId: r.id, title: r.title, tenantId: r.tenantId, chunkCount: r.chunkCount, sourceId: r.sourceId } }];"
+      },
+      "id": "a2ai1-0005-ku-status",
+      "name": "Code: Verify READY",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.skip }}",
+        "rules": { "rules": [ { "value2": "false", "outputKey": "go", "label": "Process" } ] },
+        "fallbackOutput": 1,
+        "options": {}
+      },
+      "id": "a2ai1-0006-ku-switch",
+      "name": "Switch: Process or Skip",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"EMAIL\",\n  \"event\": \"knowledge_document_ready\",\n  \"tenantId\": \"{{ $json.tenantId }}\",\n  \"template\": \"knowledge-ready\",\n  \"recipientRole\": \"KNOWLEDGE_ADMIN\",\n  \"metadata\": {\n    \"documentId\": \"{{ $json.documentId }}\",\n    \"title\": \"{{ $json.title }}\",\n    \"chunkCount\": {{ $json.chunkCount || 0 }},\n    \"documentUrl\": \"https://app.dayjoy.in/admin/knowledge/{{ $json.documentId }}\",\n    \"workflow\": \"knowledge-update-trigger\"\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2ai1-0007-ku-admin-notify",
+      "name": "Notify: Knowledge Admins",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/ai/agents/refresh-knowledge",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"documentId\": \"{{ $('Code: Verify READY').item.json.documentId }}\",\n  \"tenantId\": \"{{ $('Code: Verify READY').item.json.tenantId }}\",\n  \"sourceId\": \"{{ $('Code: Prep Document Info').item.json.sourceId }}\",\n  \"title\": \"{{ $('Code: Verify READY').item.json.title }}\",\n  \"triggeredBy\": \"n8n/knowledge-update-trigger\"\n}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "a2ai1-0008-ku-refresh",
+      "name": "Update: AI Agents Knowledge",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/ai/memory",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"type\": \"FACT\",\n  \"scope\": \"TENANT\",\n  \"entityId\": \"{{ $('Code: Verify READY').item.json.tenantId }}\",\n  \"tenantId\": \"{{ $('Code: Verify READY').item.json.tenantId }}\",\n  \"key\": \"knowledge_update\",\n  \"value\": \"Knowledge base updated with document {{ $('Code: Verify READY').item.json.title }} ({{ $('Code: Verify READY').item.json.chunkCount }} chunks)\",\n  \"expiresAt\": null,\n  \"metadata\": { \"workflow\": \"knowledge-update-trigger\", \"documentId\": \"{{ $('Code: Verify READY').item.json.documentId }}\" }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2ai1-0009-ku-memory",
+      "name": "AI: Log Knowledge Update Memory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"SYSTEM\",\n  \"event\": \"knowledge_update_workflow_completed\",\n  \"status\": \"SUCCESS\",\n  \"tenantId\": \"{{ $('Code: Verify READY').item.json.tenantId }}\",\n  \"metadata\": {\n    \"workflow\": \"knowledge-update-trigger\",\n    \"documentId\": \"{{ $('Code: Verify READY').item.json.documentId }}\",\n    \"title\": \"{{ $('Code: Verify READY').item.json.title }}\",\n    \"chunkCount\": {{ $('Code: Verify READY').item.json.chunkCount || 0 }}\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2ai1-0010-ku-audit",
+      "name": "Log: Audit Knowledge Update",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Webhook: knowledge.document_created": { "main": [ [ { "node": "Code: Prep Document Info", "type": "main", "index": 0 } ] ] },
+    "Code: Prep Document Info": { "main": [ [ { "node": "Wait: Document READY Status", "type": "main", "index": 0 } ] ] },
+    "Wait: Document READY Status": { "main": [ [ { "node": "Verify: Document is READY", "type": "main", "index": 0 } ] ] },
+    "Verify: Document is READY": { "main": [ [ { "node": "Code: Verify READY", "type": "main", "index": 0 } ] ] },
+    "Code: Verify READY": { "main": [ [ { "node": "Switch: Process or Skip", "type": "main", "index": 0 } ] ] },
+    "Switch: Process or Skip": { "main": [ [ { "node": "Notify: Knowledge Admins", "type": "main", "index": 0 } ] ] },
+    "Notify: Knowledge Admins": { "main": [ [ { "node": "Update: AI Agents Knowledge", "type": "main", "index": 0 } ] ] },
+    "Update: AI Agents Knowledge": { "main": [ [ { "node": "AI: Log Knowledge Update Memory", "type": "main", "index": 0 } ] ] },
+    "AI: Log Knowledge Update Memory": { "main": [ [ { "node": "Log: Audit Knowledge Update", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "ai" }, { "name": "knowledge" }, { "name": "rag" }, { "name": "dayjoy" }]
+}

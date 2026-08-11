@@ -1,0 +1,386 @@
+{
+  "name": "CRM — Customer Onboarding",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "crm-customer-creation",
+        "responseMode": "responseNode",
+        "options": {
+          "rawData": true,
+          "binaryPropertyName": "data"
+        }
+      },
+      "id": "a1-crm-cust-001",
+      "name": "Customer Created Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "f2b8e1a6-crm-customer-creation-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst headers = items[0].json.headers || {};\nconst secret = process.env.DAYJOY_WEBHOOK_SECRET;\nconst signature = headers['x-dayjoy-signature'];\nconst timestamp = headers['x-dayjoy-timestamp'];\nconst eventId = headers['x-dayjoy-event-id'];\nconst eventType = headers['x-dayjoy-event'];\nif (!signature || !timestamp || !eventId || !eventType) throw new Error('Missing required headers');\nif (Math.abs(Math.floor(Date.now()/1000) - parseInt(timestamp,10)) > 300) throw new Error('Stale timestamp');\nconst bodyBuffer = await this.helpers.getBinaryDataBuffer(items[0], 'data');\nconst expected = 'sha256=' + crypto.createHmac('sha256', secret).update(bodyBuffer).digest('hex');\nconst sigBuf = Buffer.from(signature), expBuf = Buffer.from(expected);\nif (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) throw new Error('Invalid signature');\nconst ALLOWED = ['customer.created'];\nif (!ALLOWED.includes(eventType)) throw new Error('Unexpected event: ' + eventType);\nconst payload = JSON.parse(bodyBuffer.toString('utf8'));\npayload._meta = { eventId, eventType, receivedAt: new Date().toISOString() };\nreturn [{ json: payload }];"
+      },
+      "id": "a1-crm-cust-002",
+      "name": "Verify HMAC Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/automation/event-dedup",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_AUTOMATION_JWT }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"eventId\":\"{{ $json._meta.eventId }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-cust-003",
+      "name": "Event Dedup Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"EMAIL\",\"recipient\":\"{{ $json.email || $json.customer.email }}\",\"template\":\"CUSTOMER_WELCOME\",\"context\":{\"firstName\":\"{{ $json.firstName || $json.customer.firstName }}\",\"customerId\":\"{{ $json.id || $json.customerId }}\"}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-cust-004",
+      "name": "Send Welcome Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 200],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/notifications/send — welcome email"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "value1": "={{ $json.whatsappOptIn || $json.customer.whatsappOptIn }}",
+              "value2": true,
+              "operation": "equal",
+              "outputKey": "opted_in"
+            }
+          ]
+        },
+        "fallbackOutput": 1
+      },
+      "id": "a1-crm-cust-005",
+      "name": "WhatsApp Opt-in?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"WHATSAPP\",\"recipient\":\"{{ $json.phone || $json.customer.phone }}\",\"template\":\"CUSTOMER_WELCOME\",\"context\":{\"firstName\":\"{{ $json.firstName || $json.customer.firstName }}\"}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-cust-006",
+      "name": "Send WhatsApp Welcome",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 280],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "Only if customer opted in to WhatsApp"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/ai/conversations/customer-{{ $('Verify HMAC Signature').item.json.id || $('Verify HMAC Signature').item.json.customerId }}/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"role\":\"system\",\"content\":\"Remember this fact: new customer registered on {{ new Date().toISOString() }}. Store in long-term memory.\",\"context\":{\"type\":\"MEMORY_WRITE\",\"entityType\":\"customer\",\"entityId\":\"{{ $('Verify HMAC Signature').item.json.id || $('Verify HMAC Signature').item.json.customerId }}\"}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-cust-007",
+      "name": "Create AI Memory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/ai/conversations/:id/messages — writes 'new customer registered' to AI long-term memory"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "value1": "={{ $json.referredBy || $json.customer.referredBy }}",
+              "operation": "isNotEmpty",
+              "outputKey": "referred"
+            }
+          ]
+        },
+        "fallbackOutput": 1
+      },
+      "id": "a1-crm-cust-008",
+      "name": "Referred by Distributor?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1320, 300]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/customers/{{ $('Verify HMAC Signature').item.json.id || $('Verify HMAC Signature').item.json.customerId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"assignedDistributorId\":\"{{ $json.referredBy || $json.customer.referredBy }}\",\"assignmentReason\":\"referral\",\"assignedAt\":\"{{ new Date().toISOString() }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-cust-009",
+      "name": "Assign to Referring Distributor",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 220],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "PUT /api/customers/:id — assign to referring distributor"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"IN_APP\",\"recipient\":\"{{ $json.referredBy || $json.customer.referredBy }}\",\"template\":\"NEW_REFERRAL_CUSTOMER\",\"context\":{\"customerName\":\"{{ $json.firstName || $json.customer.firstName }} {{ $json.lastName || $json.customer.lastName }}\"}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-cust-010",
+      "name": "Notify Referring Distributor",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 220],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/analytics/sales",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"event\":\"new_customer\",\"customerId\":\"{{ $('Verify HMAC Signature').item.json.id || $('Verify HMAC Signature').item.json.customerId }}\",\"referredBy\":\"{{ $('Verify HMAC Signature').item.json.referredBy || '' }}\",\"capturedAt\":\"{{ new Date().toISOString() }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-cust-011",
+      "name": "Increment New Customer Metric",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 380],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/analytics/sales — bump new-customer counter"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true,\"eventId\":\"{{ $('Verify HMAC Signature').item.json._meta.eventId }}\",\"customerId\":\"{{ $('Verify HMAC Signature').item.json.id || $('Verify HMAC Signature').item.json.customerId }}\"}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "a1-crm-cust-012",
+      "name": "Respond 200 Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1980, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"error\":\"invalid_signature\"}",
+        "options": { "responseCode": 401 }
+      },
+      "id": "a1-crm-cust-013",
+      "name": "Respond 401 Auth",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [220, 540]
+    }
+  ],
+  "connections": {
+    "Customer Created Webhook": {
+      "main": [
+        [
+          { "node": "Verify HMAC Signature", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Verify HMAC Signature": {
+      "main": [
+        [
+          { "node": "Event Dedup Check", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Event Dedup Check": {
+      "main": [
+        [
+          { "node": "Send Welcome Email", "type": "main", "index": 0 },
+          { "node": "WhatsApp Opt-in?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "WhatsApp Opt-in?": {
+      "main": [
+        [
+          { "node": "Send WhatsApp Welcome", "type": "main", "index": 0 }
+        ],
+        []
+      ]
+    },
+    "Send Welcome Email": {
+      "main": [
+        [
+          { "node": "Create AI Memory", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Send WhatsApp Welcome": {
+      "main": [
+        [
+          { "node": "Create AI Memory", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Create AI Memory": {
+      "main": [
+        [
+          { "node": "Referred by Distributor?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Referred by Distributor?": {
+      "main": [
+        [
+          { "node": "Assign to Referring Distributor", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Increment New Customer Metric", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Assign to Referring Distributor": {
+      "main": [
+        [
+          { "node": "Notify Referring Distributor", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Notify Referring Distributor": {
+      "main": [
+        [
+          { "node": "Increment New Customer Metric", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Increment New Customer Metric": {
+      "main": [
+        [
+          { "node": "Respond 200 Success", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "tags": [
+    { "name": "crm" },
+    { "name": "agent-a1" }
+  ],
+  "meta": {
+    "templateCreatedBy": "Agent A1 — CRM/Sales/Leads",
+    "description": "Triggered by customer.created webhook. Sends welcome email + WhatsApp (if opted in), writes to AI memory, assigns to referring distributor (if any), bumps new-customer analytics counter."
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "name": "AI — Memory Cleanup (Daily 3 AM)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "cronExpression", "expression": "0 3 * * *" } ] }
+      },
+      "id": "a2ai3-0001-mc-schedule",
+      "name": "Schedule: Daily 3 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/ai/memory/expired",
+        "options": { "timeout": 30000 }
+      },
+      "id": "a2ai3-0002-mc-expired",
+      "name": "Delete: Expired Memories",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/ai/memory/archive",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"type\": \"SUMMARY\",\n  \"olderThanDays\": 90,\n  \"archiveTo\": \"COLD_STORAGE\",\n  \"triggeredBy\": \"n8n/memory-cleanup\",\n  \"triggeredAt\": \"{{ $now.toISO() }}\"\n}",
+        "options": { "timeout": 60000 }
+      },
+      "id": "a2ai3-0003-mc-archive",
+      "name": "Archive: Old Conversation Summaries",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const expiredRes = $('Delete: Expired Memories').all()[0].json;\nconst archiveRes = $('Archive: Old Conversation Summaries').all()[0].json;\nreturn [{\n  json: {\n    expiredDeleted: expiredRes.data?.deleted || expiredRes.deleted || 0,\n    archivedSummaries: archiveRes.data?.archived || archiveRes.archived || 0,\n    archiveLocation: 'COLD_STORAGE',\n    cleanedAt: new Date().toISOString(),\n    workflow: 'memory-cleanup'\n  }\n}];"
+      },
+      "id": "a2ai3-0004-mc-stats",
+      "name": "Aggregate: Cleanup Stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2ai3-0005-mc-audit",
+      "name": "Log: Audit Cleanup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/monitoring/metrics",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"metric\": \"ai_memory_cleanup\",\n  \"value\": {{ $json.expiredDeleted + $json.archivedSummaries }},\n  \"unit\": \"count\",\n  \"tags\": { \"workflow\": \"memory-cleanup\", \"expired_deleted\": \"{{ $json.expiredDeleted }}\", \"archived\": \"{{ $json.archivedSummaries }}\" },\n  \"recordedAt\": \"{{ $json.cleanedAt }}\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2ai3-0006-mc-metrics",
+      "name": "Report: Monitoring Metrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Schedule: Daily 3 AM": { "main": [ [ { "node": "Delete: Expired Memories", "type": "main", "index": 0 } ] ] },
+    "Delete: Expired Memories": { "main": [ [ { "node": "Archive: Old Conversation Summaries", "type": "main", "index": 0 } ] ] },
+    "Archive: Old Conversation Summaries": { "main": [ [ { "node": "Aggregate: Cleanup Stats", "type": "main", "index": 0 } ] ] },
+    "Aggregate: Cleanup Stats": { "main": [ [ { "node": "Log: Audit Cleanup", "type": "main", "index": 0 } ] ] },
+    "Log: Audit Cleanup": { "main": [ [ { "node": "Report: Monitoring Metrics", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "ai" }, { "name": "memory" }, { "name": "maintenance" }, { "name": "dayjoy" }]
+}

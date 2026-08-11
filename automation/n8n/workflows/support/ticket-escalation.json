@@ -1,0 +1,135 @@
+{
+  "name": "Support — Ticket Escalation (SLA Breach Monitor)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "cronExpression", "expression": "*/30 * * * *" } ] }
+      },
+      "id": "a2s3-0001-te-schedule",
+      "name": "Schedule: Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/tickets/sla-monitor?statuses=OPEN,IN_PROGRESS",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2s3-0002-te-fetch",
+      "name": "Fetch: Active Tickets SLA State",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "id": "a2s3-0003-te-split",
+      "name": "Split: Per Ticket",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const t = $input.all()[0].json;\nconst now = new Date();\nconst slaDue = new Date(t.slaDueAt || t.dueAt);\nconst msToBreach = slaDue - now;\nconst hoursToBreach = msToBreach / 3600000;\nconst hoursOverdue = -hoursToBreach;\n\nlet stage = null;\nif (hoursOverdue >= 24) stage = 'OVERDUE_24H';\nelse if (hoursOverdue >= 0) stage = 'BREACHED';\nelse if (hoursToBreach <= 2) stage = 'APPROACHING_BREACH';\n\nif (!stage) return [{ json: { skip: true, reason: `SLA safe (${hoursToBreach.toFixed(1)}h to breach)` } }];\n\nconst escalationTier = {\n  APPROACHING_BREACH: { notifyRoles: ['ASSIGNEE', 'MANAGER'], urgency: 'WARNING' },\n  BREACHED: { notifyRoles: ['ASSIGNEE', 'MANAGER', 'SENIOR'], urgency: 'URGENT', markUrgent: true },\n  OVERDUE_24H: { notifyRoles: ['ASSIGNEE', 'MANAGER', 'SENIOR', 'DIRECTOR'], urgency: 'CRITICAL' }\n}[stage];\n\nreturn [{\n  json: {\n    skip: false,\n    stage,\n    escalationTier,\n    hoursToBreach: hoursToBreach.toFixed(2),\n    hoursOverdue: hoursOverdue.toFixed(2),\n    ticketId: t.id,\n    ticketNumber: t.ticketNumber || t.id,\n    subject: t.subject,\n    priority: t.priority,\n    category: t.category,\n    assigneeId: t.assigneeId,\n    tenantId: t.tenantId,\n    customerId: t.customerId,\n    slaDueAt: t.slaDueAt || t.dueAt\n  }\n}];"
+      },
+      "id": "a2s3-0004-te-stage",
+      "name": "Code: Determine Escalation Stage",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.skip }}",
+        "rules": { "rules": [ { "value2": "false", "outputKey": "go", "label": "Escalate" } ] },
+        "fallbackOutput": 1,
+        "options": {}
+      },
+      "id": "a2s3-0005-te-switch",
+      "name": "Switch: Escalate or Skip",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/tickets/{{ $json.ticketId }}/escalate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"stage\": \"{{ $json.stage }}\",\n  \"urgency\": \"{{ $json.escalationTier.urgency }}\",\n  \"notifyRoles\": {{ JSON.stringify($json.escalationTier.notifyRoles) }},\n  \"hoursToBreach\": {{ $json.hoursToBreach }},\n  \"hoursOverdue\": {{ $json.hoursOverdue }},\n  \"markUrgent\": {{ $json.escalationTier.markUrgent || false }},\n  \"escalatedAt\": \"{{ $now.toISO() }}\",\n  \"escalatedBy\": \"n8n/ticket-escalation\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2s3-0006-te-escalate",
+      "name": "Escalate: Notify Roles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"MULTI\",\n  \"event\": \"ticket_sla_escalation\",\n  \"ticketId\": \"{{ $('Code: Determine Escalation Stage').item.json.ticketId }}\",\n  \"tenantId\": \"{{ $('Code: Determine Escalation Stage').item.json.tenantId }}\",\n  \"template\": \"ticket-sla-escalation\",\n  \"priority\": \"HIGH\",\n  \"metadata\": {\n    \"stage\": \"{{ $('Code: Determine Escalation Stage').item.json.stage }}\",\n    \"urgency\": \"{{ $('Code: Determine Escalation Stage').item.json.escalationTier.urgency }}\",\n    \"notifyRoles\": {{ JSON.stringify($('Code: Determine Escalation Stage').item.json.escalationTier.notifyRoles) }},\n    \"hoursToBreach\": {{ $('Code: Determine Escalation Stage').item.json.hoursToBreach }},\n    \"hoursOverdue\": {{ $('Code: Determine Escalation Stage').item.json.hoursOverdue }},\n    \"ticketNumber\": \"{{ $('Code: Determine Escalation Stage').item.json.ticketNumber }}\",\n    \"subject\": \"{{ $('Code: Determine Escalation Stage').item.json.subject }}\",\n    \"ticketUrl\": \"https://app.dayjoy.in/support/tickets/{{ $('Code: Determine Escalation Stage').item.json.ticketId }}\",\n    \"workflow\": \"ticket-escalation\"\n  }\n}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2s3-0007-te-notify",
+      "name": "Dispatch: Escalation Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"SYSTEM\",\n  \"event\": \"ticket_sla_escalation_completed\",\n  \"ticketId\": \"{{ $('Code: Determine Escalation Stage').item.json.ticketId }}\",\n  \"status\": \"SUCCESS\",\n  \"tenantId\": \"{{ $('Code: Determine Escalation Stage').item.json.tenantId }}\",\n  \"metadata\": {\n    \"workflow\": \"ticket-escalation\",\n    \"stage\": \"{{ $('Code: Determine Escalation Stage').item.json.stage }}\",\n    \"urgency\": \"{{ $('Code: Determine Escalation Stage').item.json.escalationTier.urgency }}\",\n    \"hoursOverdue\": {{ $('Code: Determine Escalation Stage').item.json.hoursOverdue }}\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2s3-0008-te-audit",
+      "name": "Log: Audit Escalation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Schedule: Every 30 Minutes": { "main": [ [ { "node": "Fetch: Active Tickets SLA State", "type": "main", "index": 0 } ] ] },
+    "Fetch: Active Tickets SLA State": { "main": [ [ { "node": "Split: Per Ticket", "type": "main", "index": 0 } ] ] },
+    "Split: Per Ticket": { "main": [ [ { "node": "Code: Determine Escalation Stage", "type": "main", "index": 0 } ] ] },
+    "Code: Determine Escalation Stage": { "main": [ [ { "node": "Switch: Escalate or Skip", "type": "main", "index": 0 } ] ] },
+    "Switch: Escalate or Skip": { "main": [ [ { "node": "Escalate: Notify Roles", "type": "main", "index": 0 } ] ] },
+    "Escalate: Notify Roles": { "main": [ [ { "node": "Dispatch: Escalation Notification", "type": "main", "index": 0 } ] ] },
+    "Dispatch: Escalation Notification": { "main": [ [ { "node": "Log: Audit Escalation", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "support" }, { "name": "tickets" }, { "name": "sla" }, { "name": "escalation" }, { "name": "dayjoy" }]
+}

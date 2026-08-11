@@ -1,0 +1,170 @@
+{
+  "name": "Orders — Payment Success → Invoice + Fulfillment + Commission",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "orders/payment-success",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a2o2-0001-ps-webhook",
+      "name": "Webhook: order.payment_status",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "a2o2-ps-webhook-id"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.all()[0].json.body;\nif (body.event !== 'order.payment_status') return [{ json: { skip: true, reason: 'Wrong event' } }];\nconst status = (body.data.paymentStatus || body.data.status || '').toUpperCase();\nif (status !== 'PAID') return [{ json: { skip: true, reason: `Payment status is ${status}, not PAID` } }];\nreturn [{ json: { skip: false, orderId: body.data.id, tenantId: body.data.tenantId, paymentId: body.data.paymentId, paymentMethod: body.data.paymentMethod, paidAt: body.data.paidAt } }];"
+      },
+      "id": "a2o2-0002-ps-filter",
+      "name": "Code: Filter PAID status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.skip }}",
+        "rules": { "rules": [ { "value2": "false", "outputKey": "go", "label": "Process Payment" } ] },
+        "fallbackOutput": 1,
+        "options": {}
+      },
+      "id": "a2o2-0003-ps-switch",
+      "name": "Switch: Process or Skip",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/invoices/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"orderId\": \"{{ $('Code: Filter PAID status').item.json.orderId }}\",\n  \"tenantId\": \"{{ $('Code: Filter PAID status').item.json.tenantId }}\",\n  \"paymentId\": \"{{ $('Code: Filter PAID status').item.json.paymentId }}\",\n  \"paymentMethod\": \"{{ $('Code: Filter PAID status').item.json.paymentMethod }}\",\n  \"paidAt\": \"{{ $('Code: Filter PAID status').item.json.paidAt }}\",\n  \"triggeredBy\": \"n8n/payment-success\"\n}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2o2-0004-ps-invoice",
+      "name": "Generate: Invoice",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"EMAIL\",\n  \"event\": \"invoice_generated\",\n  \"orderId\": \"{{ $('Code: Filter PAID status').item.json.orderId }}\",\n  \"tenantId\": \"{{ $('Code: Filter PAID status').item.json.tenantId }}\",\n  \"template\": \"invoice-email\",\n  \"attachment\": { \"type\": \"invoice\", \"id\": \"{{ $json.data.invoiceId || $json.invoiceId || $json.id }}\" },\n  \"metadata\": { \"workflow\": \"payment-success\", \"invoiceId\": \"{{ $json.data.invoiceId || $json.invoiceId || $json.id }}\" }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2o2-0005-ps-invoice-email",
+      "name": "Send: Invoice Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/orders/{{ $('Code: Filter PAID status').item.json.orderId }}/status",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"CONFIRMED\",\n  \"reason\": \"Payment received\",\n  \"paymentId\": \"{{ $('Code: Filter PAID status').item.json.paymentId }}\",\n  \"updatedBy\": \"n8n/payment-success\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2o2-0006-ps-status",
+      "name": "Update: Order Status → CONFIRMED",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/warehouse/fulfillment-requests",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"orderId\": \"{{ $('Code: Filter PAID status').item.json.orderId }}\",\n  \"tenantId\": \"{{ $('Code: Filter PAID status').item.json.tenantId }}\",\n  \"priority\": \"NORMAL\",\n  \"requestedAt\": \"{{ $now.toISO() }}\",\n  \"requestedBy\": \"n8n/payment-success\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2o2-0007-ps-warehouse",
+      "name": "Notify: Warehouse Fulfillment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/commissions/calculate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"orderId\": \"{{ $('Code: Filter PAID status').item.json.orderId }}\",\n  \"tenantId\": \"{{ $('Code: Filter PAID status').item.json.tenantId }}\",\n  \"paymentStatus\": \"PAID\",\n  \"triggeredBy\": \"n8n/payment-success\"\n}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2o2-0008-ps-commission",
+      "name": "Calculate: Distributor Commission",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"SYSTEM\",\n  \"event\": \"payment_success_workflow_completed\",\n  \"orderId\": \"{{ $('Code: Filter PAID status').item.json.orderId }}\",\n  \"status\": \"SUCCESS\",\n  \"tenantId\": \"{{ $('Code: Filter PAID status').item.json.tenantId }}\",\n  \"metadata\": {\n    \"workflow\": \"payment-success\",\n    \"invoiceId\": \"{{ $('Generate: Invoice').item.json.data.invoiceId || $('Generate: Invoice').item.json.invoiceId || $('Generate: Invoice').item.json.id }}\",\n    \"commissionId\": \"{{ $json.data.commissionId || $json.commissionId || null }}\",\n    \"steps\": [\"invoice_generated\", \"invoice_email_sent\", \"order_confirmed\", \"warehouse_notified\", \"commission_calculated\"]\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2o2-0009-ps-audit",
+      "name": "Log: Audit Payment Success",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Webhook: order.payment_status": { "main": [ [ { "node": "Code: Filter PAID status", "type": "main", "index": 0 } ] ] },
+    "Code: Filter PAID status": { "main": [ [ { "node": "Switch: Process or Skip", "type": "main", "index": 0 } ] ] },
+    "Switch: Process or Skip": { "main": [ [ { "node": "Generate: Invoice", "type": "main", "index": 0 } ] ] },
+    "Generate: Invoice": { "main": [ [ { "node": "Send: Invoice Email", "type": "main", "index": 0 } ] ] },
+    "Send: Invoice Email": { "main": [ [ { "node": "Update: Order Status → CONFIRMED", "type": "main", "index": 0 } ] ] },
+    "Update: Order Status → CONFIRMED": { "main": [ [ { "node": "Notify: Warehouse Fulfillment", "type": "main", "index": 0 } ] ] },
+    "Notify: Warehouse Fulfillment": { "main": [ [ { "node": "Calculate: Distributor Commission", "type": "main", "index": 0 } ] ] },
+    "Calculate: Distributor Commission": { "main": [ [ { "node": "Log: Audit Payment Success", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "orders" }, { "name": "payment" }, { "name": "invoice" }, { "name": "commission" }, { "name": "dayjoy" }]
+}

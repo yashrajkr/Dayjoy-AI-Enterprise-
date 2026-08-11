@@ -1,0 +1,190 @@
+{
+  "name": "Orders — Delivery Confirmation + CSAT + LTV + Commission",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "orders/delivery-confirmation",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a2o4-0001-dc-webhook",
+      "name": "Webhook: order.status=DELIVERED",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "a2o4-dc-webhook-id"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.all()[0].json.body;\nconst ev = body.event;\nconst status = (body.data.status || body.data.orderStatus || '').toUpperCase();\nif (ev !== 'order.status' || status !== 'DELIVERED') return [{ json: { skip: true, reason: `Skipping event=${ev} status=${status}` } }];\nreturn [{ json: { skip: false, orderId: body.data.id, tenantId: body.data.tenantId, deliveredAt: body.data.deliveredAt || new Date().toISOString(), customerId: body.data.customerId, distributorId: body.data.distributorId } }];"
+      },
+      "id": "a2o4-0002-dc-filter",
+      "name": "Code: Filter DELIVERED",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.skip }}",
+        "rules": { "rules": [ { "value2": "false", "outputKey": "go", "label": "Process Delivery" } ] },
+        "fallbackOutput": 1,
+        "options": {}
+      },
+      "id": "a2o4-0003-dc-switch",
+      "name": "Switch: Process or Skip",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch-multi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channels\": [\"EMAIL\", \"WHATSAPP\"],\n  \"event\": \"order_delivered\",\n  \"orderId\": \"{{ $json.orderId }}\",\n  \"tenantId\": \"{{ $json.tenantId }}\",\n  \"template\": \"delivery-confirmation\",\n  \"metadata\": { \"workflow\": \"delivery-confirmation\", \"deliveredAt\": \"{{ $json.deliveredAt }}\" }\n}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2o4-0004-dc-confirm",
+      "name": "Dispatch: Delivery Confirmation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch-multi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channels\": [\"EMAIL\", \"WHATSAPP\"],\n  \"event\": \"csat_request\",\n  \"orderId\": \"{{ $('Code: Filter DELIVERED').item.json.orderId }}\",\n  \"tenantId\": \"{{ $('Code: Filter DELIVERED').item.json.tenantId }}\",\n  \"template\": \"csat-request\",\n  \"metadata\": {\n    \"workflow\": \"delivery-confirmation\",\n    \"csatFormUrl\": \"https://app.dayjoy.in/orders/{{ $('Code: Filter DELIVERED').item.json.orderId }}/feedback\"\n  }\n}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2o4-0005-dc-csat",
+      "name": "Dispatch: CSAT Feedback Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/workflows/schedule",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow\": \"email/follow-up-email\",\n  \"triggerEvent\": \"order.delivered\",\n  \"delayDays\": 3,\n  \"entityId\": \"{{ $('Code: Filter DELIVERED').item.json.orderId }}\",\n  \"tenantId\": \"{{ $('Code: Filter DELIVERED').item.json.tenantId }}\",\n  \"scheduledBy\": \"n8n/delivery-confirmation\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2o4-0006-dc-followup",
+      "name": "Schedule: Review Follow-Up (3d)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/customers/{{ $('Code: Filter DELIVERED').item.json.customerId }}/ltv",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"orderId\": \"{{ $('Code: Filter DELIVERED').item.json.orderId }}\",\n  \"event\": \"ORDER_DELIVERED\",\n  \"deliveredAt\": \"{{ $('Code: Filter DELIVERED').item.json.deliveredAt }}\",\n  \"updatedBy\": \"n8n/delivery-confirmation\"\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2o4-0007-dc-ltv",
+      "name": "Update: Customer LTV",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/commissions/pay",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"orderId\": \"{{ $('Code: Filter DELIVERED').item.json.orderId }}\",\n  \"tenantId\": \"{{ $('Code: Filter DELIVERED').item.json.tenantId }}\",\n  \"distributorId\": \"{{ $('Code: Filter DELIVERED').item.json.distributorId }}\",\n  \"trigger\": \"ORDER_DELIVERED\",\n  \"paidAt\": \"{{ $now.toISO() }}\",\n  \"triggeredBy\": \"n8n/delivery-confirmation\"\n}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a2o4-0008-dc-commission",
+      "name": "Pay: Distributor Commission",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/ai/memory",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"type\": \"FACT\",\n  \"scope\": \"CUSTOMER\",\n  \"entityId\": \"{{ $('Code: Filter DELIVERED').item.json.customerId }}\",\n  \"tenantId\": \"{{ $('Code: Filter DELIVERED').item.json.tenantId }}\",\n  \"key\": \"order_delivered\",\n  \"value\": \"Order {{ $('Code: Filter DELIVERED').item.json.orderId }} delivered to customer {{ $('Code: Filter DELIVERED').item.json.customerId }} on {{ $('Code: Filter DELIVERED').item.json.deliveredAt }}\",\n  \"expiresAt\": null,\n  \"metadata\": { \"workflow\": \"delivery-confirmation\", \"orderId\": \"{{ $('Code: Filter DELIVERED').item.json.orderId }}\" }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2o4-0009-dc-memory",
+      "name": "AI: Create Delivery Memory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"SYSTEM\",\n  \"event\": \"delivery_confirmation_workflow_completed\",\n  \"orderId\": \"{{ $('Code: Filter DELIVERED').item.json.orderId }}\",\n  \"status\": \"SUCCESS\",\n  \"tenantId\": \"{{ $('Code: Filter DELIVERED').item.json.tenantId }}\",\n  \"metadata\": {\n    \"workflow\": \"delivery-confirmation\",\n    \"steps\": [\"confirmation_sent\", \"csat_requested\", \"followup_scheduled\", \"ltv_updated\", \"commission_paid\", \"ai_memory_created\"]\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2o4-0010-dc-audit",
+      "name": "Log: Audit Delivery",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Webhook: order.status=DELIVERED": { "main": [ [ { "node": "Code: Filter DELIVERED", "type": "main", "index": 0 } ] ] },
+    "Code: Filter DELIVERED": { "main": [ [ { "node": "Switch: Process or Skip", "type": "main", "index": 0 } ] ] },
+    "Switch: Process or Skip": { "main": [ [ { "node": "Dispatch: Delivery Confirmation", "type": "main", "index": 0 } ] ] },
+    "Dispatch: Delivery Confirmation": { "main": [ [ { "node": "Dispatch: CSAT Feedback Request", "type": "main", "index": 0 } ] ] },
+    "Dispatch: CSAT Feedback Request": { "main": [ [ { "node": "Schedule: Review Follow-Up (3d)", "type": "main", "index": 0 } ] ] },
+    "Schedule: Review Follow-Up (3d)": { "main": [ [ { "node": "Update: Customer LTV", "type": "main", "index": 0 } ] ] },
+    "Update: Customer LTV": { "main": [ [ { "node": "Pay: Distributor Commission", "type": "main", "index": 0 } ] ] },
+    "Pay: Distributor Commission": { "main": [ [ { "node": "AI: Create Delivery Memory", "type": "main", "index": 0 } ] ] },
+    "AI: Create Delivery Memory": { "main": [ [ { "node": "Log: Audit Delivery", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "orders" }, { "name": "delivery" }, { "name": "csat" }, { "name": "commission" }, { "name": "dayjoy" }]
+}

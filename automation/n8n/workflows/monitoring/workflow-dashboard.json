@@ -1,0 +1,271 @@
+{
+  "name": "Dayjoy — Workflow Metrics Dashboard",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 5 }] }
+      },
+      "id": "4d5e6f7a-0001-4000-8000-000000000001",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "notes": "Drives the metrics collection loop. Runs every 5 minutes, 288 times per day."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:5678/api/v1/executions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Basic {{ $env.N8N_BASIC_AUTH_USER }}:{{ $env.N8N_ADMIN_PASSWORD }}" }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "status", "value": "success" },
+            { "name": "lastHours", "value": 1 },
+            { "name": "limit", "value": 250 }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      },
+      "id": "4d5e6f7a-0001-4000-8000-000000000002",
+      "name": "Executions (1h, success)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, -400]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:5678/api/v1/executions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Basic {{ $env.N8N_BASIC_AUTH_USER }}:{{ $env.N8N_ADMIN_PASSWORD }}" }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "status", "value": "error" },
+            { "name": "lastHours", "value": 1 },
+            { "name": "limit", "value": 250 }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      },
+      "id": "4d5e6f7a-0001-4000-8000-000000000003",
+      "name": "Executions (1h, error)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, -200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:5678/api/v1/executions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Basic {{ $env.N8N_BASIC_AUTH_USER }}:{{ $env.N8N_ADMIN_PASSWORD }}" }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "lastHours", "value": 24 },
+            { "name": "limit", "value": 250 }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      },
+      "id": "4d5e6f7a-0001-4000-8000-000000000004",
+      "name": "Executions (24h, all)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:5678/api/v1/executions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Basic {{ $env.N8N_BASIC_AUTH_USER }}:{{ $env.N8N_ADMIN_PASSWORD }}" }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "lastHours", "value": 168 },
+            { "name": "limit", "value": 250 }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      },
+      "id": "4d5e6f7a-0001-4000-8000-000000000005",
+      "name": "Executions (7d, all)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:5678/api/v1/workflows",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Basic {{ $env.N8N_BASIC_AUTH_USER }}:{{ $env.N8N_ADMIN_PASSWORD }}" }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      },
+      "id": "4d5e6f7a-0001-4000-8000-000000000006",
+      "name": "List Workflows",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 400]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:5678/metrics",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Basic {{ $env.N8N_BASIC_AUTH_USER }}:{{ $env.N8N_ADMIN_PASSWORD }}" }
+          ]
+        },
+        "options": { "timeout": 10000 }
+      },
+      "id": "4d5e6f7a-0001-4000-8000-000000000007",
+      "name": "n8n Prometheus Metrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 600],
+      "notes": "Pulls native n8n /metrics endpoint (Prometheus exposition format). Provides active workflows, queue depth, and per-workflow counters."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all the parallel HTTP responses into a single metrics payload.\n// Items from earlier nodes arrive via $items('Node Name').all\n\nconst success1h = $items('Executions (1h, success)').all.length;\nconst error1h = $items('Executions (1h, error)').all.length;\nconst total1h = success1h + error1h;\nconst total24h = $items('Executions (24h, all)').all.length;\nconst total7d = $items('Executions (7d, all)').all.length;\n\n// Success rate per workflow (last 24h)\nconst execs24h = $items('Executions (24h, all)').all.map(i => i.json);\nconst byWorkflow = {};\nfor (const e of execs24h) {\n  const wid = e.workflowId || (e.workflow?.id) || 'unknown';\n  const wname = e.workflow?.name || wid;\n  if (!byWorkflow[wid]) byWorkflow[wid] = { id: wid, name: wname, total: 0, success: 0, error: 0, durations: [] };\n  byWorkflow[wid].total++;\n  if (e.status === 'success' || e.finished === true) byWorkflow[wid].success++;\n  if (e.status === 'error' || e.status === 'failed') byWorkflow[wid].error++;\n  if (typeof e.runningTime === 'number') byWorkflow[wid].durations.push(e.runningTime);\n}\n\nconst perWorkflow = Object.values(byWorkflow).map(w => ({\n  workflow_id: w.id,\n  workflow_name: w.name,\n  total_24h: w.total,\n  success_24h: w.success,\n  error_24h: w.error,\n  success_rate_24h: w.total ? (w.success / w.total) * 100 : 100,\n  failure_rate_24h: w.total ? (w.error / w.total) * 100 : 0,\n  avg_duration_ms_24h: w.durations.length ? Math.round(w.durations.reduce((a, b) => a + b, 0) / w.durations.length) : 0\n}));\n\n// Active workflows count\nconst workflows = $items('List Workflows').all.map(i => i.json).filter(w => w.active === true);\n\n// Parse queue depth from /metrics (Prometheus text)\nconst metricsText = $items('n8n Prometheus Metrics').all[0]?.json?.data || $items('n8n Prometheus Metrics').all[0]?.json || '';\nconst queueMatch = (typeof metricsText === 'string' ? metricsText : JSON.stringify(metricsText)).match(/dayjoy_n8n_active_workflow_count\\s+(\\d+)/);\nconst queueDepthMatch = (typeof metricsText === 'string' ? metricsText : JSON.stringify(metricsText)).match(/dayjoy_n8n_active_workflow_count\\s+(\\d+)/);\n\nconst metrics = {\n  collected_at: new Date().toISOString(),\n  totals: {\n    executions_1h: total1h,\n    executions_success_1h: success1h,\n    executions_error_1h: error1h,\n    executions_24h: total24h,\n    executions_7d: total7d,\n    success_rate_1h_pct: total1h ? (success1h / total1h) * 100 : 100,\n    failure_rate_1h_pct: total1h ? (error1h / total1h) * 100 : 0,\n    active_workflows: workflows.length,\n    queue_depth: queueDepthMatch ? parseInt(queueDepthMatch[1], 10) : 0\n  },\n  per_workflow: perWorkflow.sort((a, b) => b.total_24h - a.total_24h).slice(0, 50),\n  instance: {\n    host: process.env.N8N_HOST || 'n8n.dayjoy.ai',\n    version: $items('n8n Prometheus Metrics').all[0]?.json?.version || 'unknown'\n  }\n};\n\nreturn { json: metrics };\n"
+      },
+      "id": "4d5e6f7a-0001-4000-8000-000000000008",
+      "name": "Aggregate Metrics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 100],
+      "notes": "Reduces raw execution lists into: totals (1h/24h/7d), per-workflow success/failure/avg-duration, active workflow count, queue depth."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.PROMETHEUS_PUSHGATEWAY_URL }}/metrics/job/dayjoy-n8n-dashboard/instance/{{ $json.instance.host }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "text/plain; version=0.0.4; charset=utf-8" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "string",
+        "body": "=# HELP dayjoy_n8n_executions_1h Total n8n executions in the last hour\\n# TYPE dayjoy_n8n_executions_1h gauge\\ndayjoy_n8n_executions_1h {{ $json.totals.executions_1h }}\\n# HELP dayjoy_n8n_executions_24h Total n8n executions in the last 24 hours\\n# TYPE dayjoy_n8n_executions_24h gauge\\ndayjoy_n8n_executions_24h {{ $json.totals.executions_24h }}\\n# HELP dayjoy_n8n_executions_7d Total n8n executions in the last 7 days\\n# TYPE dayjoy_n8n_executions_7d gauge\\ndayjoy_n8n_executions_7d {{ $json.totals.executions_7d }}\\n# HELP dayjoy_n8n_success_rate_1h_pct Success rate (%) over last hour\\n# TYPE dayjoy_n8n_success_rate_1h_pct gauge\\ndayjoy_n8n_success_rate_1h_pct {{ $json.totals.success_rate_1h_pct }}\\n# HELP dayjoy_n8n_failure_rate_1h_pct Failure rate (%) over last hour\\n# TYPE dayjoy_n8n_failure_rate_1h_pct gauge\\ndayjoy_n8n_failure_rate_1h_pct {{ $json.totals.failure_rate_1h_pct }}\\n# HELP dayjoy_n8n_active_workflows Number of active (enabled) workflows\\n# TYPE dayjoy_n8n_active_workflows gauge\\ndayjoy_n8n_active_workflows {{ $json.totals.active_workflows }}\\n# HELP dayjoy_n8n_queue_depth Pending items in the n8n execution queue\\n# TYPE dayjoy_n8n_queue_depth gauge\\ndayjoy_n8n_queue_depth {{ $json.totals.queue_depth }}\\n{{ $json.per_workflow.map(w => `dayjoy_n8n_workflow_success_rate{workflow_id=\"${w.workflow_id}\",workflow_name=\"${w.workflow_name.replace(/\"/g, '\\\\\\\"')}\"} ${w.success_rate_24h}\\ndayjoy_n8n_workflow_failure_rate{workflow_id=\"${w.workflow_id}\",workflow_name=\"${w.workflow_name.replace(/\"/g, '\\\\\\\"')}\"} ${w.failure_rate_24h}\\ndayjoy_n8n_workflow_avg_duration_ms{workflow_id=\"${w.workflow_id}\",workflow_name=\"${w.workflow_name.replace(/\"/g, '\\\\\\\"')}\"} ${w.avg_duration_ms_24h}\\n`).join('') }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "4d5e6f7a-0001-4000-8000-000000000009",
+      "name": "Push to Prometheus Pushgateway",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 100],
+      "notes": "Pushes aggregated gauges to the Prometheus pushgateway. Grafana scrapes the pushgateway every 15s."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/n8n/metrics",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "4d5e6f7a-0001-4000-8000-000000000010",
+      "name": "Persist to Backend DB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [960, 100],
+      "notes": "Mirrors the metrics snapshot into the Dayjoy backend's n8n_metrics table for long-term retention and the admin dashboard's 'Automation Health' panel."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_URL }}/api/internal/grafana/refresh-dashboard",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_API_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"dashboard_uid\": \"dayjoy-n8n-overview\",\n  \"trigger\": \"metrics_refresh\",\n  \"snapshot_at\": $json.collected_at\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "4d5e6f7a-0001-4000-8000-000000000011",
+      "name": "Refresh Grafana Dashboard",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 100],
+      "notes": "Triggers a Grafana dashboard refresh so the n8n Overview panel reflects the latest metrics without waiting for the next scrape interval."
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          { "node": "Executions (1h, success)", "type": "main", "index": 0 },
+          { "node": "Executions (1h, error)", "type": "main", "index": 0 },
+          { "node": "Executions (24h, all)", "type": "main", "index": 0 },
+          { "node": "Executions (7d, all)", "type": "main", "index": 0 },
+          { "node": "List Workflows", "type": "main", "index": 0 },
+          { "node": "n8n Prometheus Metrics", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Executions (1h, success)": { "main": [ [{ "node": "Aggregate Metrics", "type": "main", "index": 0 }] ] },
+    "Executions (1h, error)": { "main": [ [{ "node": "Aggregate Metrics", "type": "main", "index": 0 }] ] },
+    "Executions (24h, all)": { "main": [ [{ "node": "Aggregate Metrics", "type": "main", "index": 0 }] ] },
+    "Executions (7d, all)": { "main": [ [{ "node": "Aggregate Metrics", "type": "main", "index": 0 }] ] },
+    "List Workflows": { "main": [ [{ "node": "Aggregate Metrics", "type": "main", "index": 0 }] ] },
+    "n8n Prometheus Metrics": { "main": [ [{ "node": "Aggregate Metrics", "type": "main", "index": 0 }] ] },
+    "Aggregate Metrics": { "main": [ [{ "node": "Push to Prometheus Pushgateway", "type": "main", "index": 0 }] ] },
+    "Push to Prometheus Pushgateway": { "main": [ [{ "node": "Persist to Backend DB", "type": "main", "index": 0 }] ] },
+    "Persist to Backend DB": { "main": [ [{ "node": "Refresh Grafana Dashboard", "type": "main", "index": 0 }] ] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": true,
+  "tags": [{ "name": "monitoring" }, { "name": "metrics" }, { "name": "production" }],
+  "meta": {
+    "templateCreatedBy": "Dayjoy Platform Team",
+    "description": "Every 5 minutes collects n8n execution metrics (1h/24h/7d totals, per-workflow success/failure/avg-duration, active workflow count, queue depth), pushes gauges to the Prometheus pushgateway, persists the snapshot to the backend DB, and triggers a Grafana dashboard refresh.",
+    "version": "1.0.0"
+  }
+}

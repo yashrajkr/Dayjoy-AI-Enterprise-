@@ -1,0 +1,85 @@
+Dayjoy AI Enterprise Platform — Product Catalogue (Sample Document)
+==================================================================
+
+This is a sample plain-text document used by the RAG integration test
+suite. It contains a mix of structured (headings + paragraphs) and
+semi-structured (bulleted list, FAQ-style Q&A) content so the chunking
+pipeline can be exercised against realistic input.
+
+------------------------------------------------------------
+SECTION 1: Dayjoy Premium Health Tonic
+------------------------------------------------------------
+
+The Dayjoy Premium Health Tonic is the flagship product of the Dayjoy
+AI Enterprise platform. Each 500 ml bottle contains a proprietary blend
+of Ayurvedic herbs including ashwagandha, shatavari, amla, and
+giloy. The tonic is formulated to support daily energy, immunity, and
+overall well-being.
+
+Key ingredients:
+  - Ashwagandha (Withania somnifera) — 200 mg per serving
+  - Shatavari (Asparagus racemosus) — 150 mg per serving
+  - Amla (Phyllanthus emblica) — 100 mg per serving
+  - Giloy (Tinospora cordifolia) — 100 mg per serving
+
+Recommended dosage: 15 ml twice daily after meals, diluted in an equal
+volume of water. Shake well before use. Refrigerate after opening and
+consume within 30 days.
+
+Pricing: The MRP is Rs. 699 for a 500 ml bottle. Distributors receive a
+25% margin on the MRP. Volume discounts apply for orders above 100
+units — contact your area sales manager for the current rate card.
+
+------------------------------------------------------------
+SECTION 2: Distributor Onboarding
+------------------------------------------------------------
+
+To become a Dayjoy distributor, an applicant must:
+
+  1. Submit the online application form available on the Dayjoy
+     distributor portal.
+  2. Provide a valid GST registration certificate and PAN card.
+  3. Complete the mandatory online training programme (approximately
+     4 hours) covering product knowledge, sales process, and the
+     distributor compensation plan.
+  4. Pay a refundable security deposit of Rs. 5,000.
+  5. Be verified by the area sales manager, typically within 5–7
+     business days of application submission.
+
+Once onboarded, a distributor is assigned a unique distributor ID and
+gains access to the distributor mobile app for placing orders, tracking
+commissions, and viewing downline performance.
+
+------------------------------------------------------------
+SECTION 3: Compensation Plan
+------------------------------------------------------------
+
+Distributor earnings are computed monthly and comprise three
+components:
+
+  - Retail profit — the difference between the distributor price and
+    the MRP, paid upfront at the time of order.
+  - Performance bonus — a percentage of personal sales volume (PV),
+    paid monthly. The percentage ranges from 5% (for PV < 10,000) to
+    20% (for PV ≥ 50,000).
+  - Leadership bonus — paid to distributors who recruit and mentor
+    downline distributors. Calculated as 5% of the downline's monthly
+    PV, up to two levels deep.
+
+Commissions are credited to the distributor's registered bank account
+on the 10th of every month, subject to KYC verification.
+
+------------------------------------------------------------
+SECTION 4: Customer Support
+------------------------------------------------------------
+
+Customers can reach Dayjoy support through three channels:
+
+  - WhatsApp AI Assistant: +91-XXXXX-XXXXX (24/7, automated)
+  - Voice AI helpline: 1800-XXX-XXXX (9 AM – 9 PM IST, Monday to
+    Saturday)
+  - Email: support@dayjoy.example
+
+The WhatsApp assistant can handle order tracking, refund initiation,
+product information queries, and distributor lookups. Complex queries
+are escalated to a human agent within one business hour.

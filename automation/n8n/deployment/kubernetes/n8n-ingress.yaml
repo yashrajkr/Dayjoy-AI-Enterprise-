@@ -1,0 +1,95 @@
+# =============================================================================
+# Dayjoy n8n — Ingress (TLS)
+# nginx-ingress with cert-manager (Let's Encrypt) for TLS termination.
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: n8n-ingress
+  namespace: dayjoy-n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/part-of: dayjoy-ai-enterprise
+  annotations:
+    # nginx-ingress annotations
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-next-upstream: "error timeout http_502 http_503 http_504"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-tries: "3"
+
+    # TLS via cert-manager
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    cert-manager.io/common-name: "n8n.dayjoy.ai"
+
+    # Rate limiting on webhook endpoints
+    nginx.ingress.kubernetes.io/limit-connections: "20"
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+      more_set_headers "Permissions-Policy: geolocation=(), microphone=(), camera=()";
+      more_set_headers "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.dayjoy.ai; frame-ancestors 'none'";
+
+    # Basic auth (defense-in-depth on top of n8n's own auth)
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: n8n-basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: "Authentication Required - Dayjoy n8n"
+
+    # Skip basic-auth for webhook paths (webhooks sign with HMAC instead)
+    nginx.ingress.kubernetes.io/server-snippet: |
+      location ~ ^/(webhook|webhook-test)/ {
+        proxy_pass http://n8n-main.dayjoy-n8n.svc.cluster.local:5678;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        # No basic auth — webhook verifies HMAC signature
+        auth_basic off;
+      }
+
+    # Cloudflare real IP restoration
+    nginx.ingress.kubernetes.io/use-forwarded-headers: "true"
+
+    # HSTS preload eligibility
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+    - hosts:
+        - n8n.dayjoy.ai
+      secretName: n8n-tls
+  rules:
+    - host: n8n.dayjoy.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: n8n-main
+                port:
+                  number: 5678
+---
+# Basic-auth secret for the ingress
+# Generate with: htpasswd -nb "$N8N_ADMIN_USER" "$N8N_ADMIN_PASSWORD" | base64
+# Store the result in this Secret under the 'auth' key (stringData: auth: "<htpasswd-output>")
+apiVersion: v1
+kind: Secret
+metadata:
+  name: n8n-basic-auth
+  namespace: dayjoy-n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/part-of: dayjoy-ai-enterprise
+type: Opaque
+stringData:
+  # PLACEHOLDER — replace with `htpasswd -nb admin@dayjoy.ai <password>` output
+  # In production, this is managed by ExternalSecret (see n8n-secret.yaml)
+  auth: "admin@dayjoy.ai:{SHA}REPLACE_WITH_HTpasswd_HASH"

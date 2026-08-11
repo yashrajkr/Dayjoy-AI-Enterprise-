@@ -1,0 +1,150 @@
+{
+  "name": "Calendar — Appointment Reschedule",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "calendar/appointment-reschedule",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a2c2-0001-resched-webhook",
+      "name": "Webhook: appointment.updated",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "a2c2-resched-webhook-id"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.all()[0].json.body;\nif (body.event !== 'appointment.updated') return [];\nconst before = body.data.before || {};\nconst after = body.data.after || body.data;\nconst dtChanged = (before.startTime !== after.startTime) || (before.endTime !== after.endTime);\nif (!dtChanged) return [{ json: { skip: true, reason: 'Datetime unchanged' } }];\nreturn [{ json: { skip: false, after, before, tenantId: after.tenantId, appointmentId: after.id } }];"
+      },
+      "id": "a2c2-0002-resched-filter",
+      "name": "Code: Detect Datetime Change",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.skip }}",
+        "rules": { "rules": [ { "value2": "false", "outputKey": "process", "label": "Process" } ] },
+        "fallbackOutput": 1,
+        "options": {}
+      },
+      "id": "a2c2-0003-resched-switch",
+      "name": "Switch: Process or Skip",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/appointments/{{ $json.after.id }}/external-ref",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2c2-0004-resched-fetch-ref",
+      "name": "Fetch: External GCal Ref",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "calendarId": { "__rl": true, "value": "={{ $json.data.externalCalendarId || $json.data.employeeEmail || 'primary' }}", "mode": "id" },
+        "eventId": { "__rl": true, "value": "={{ $json.data.externalEventId }}", "mode": "id" },
+        "start": "={{ $('Code: Detect Datetime Change').item.json.after.startTime || $('Code: Detect Datetime Change').item.json.after.start }}",
+        "end": "={{ $('Code: Detect Datetime Change').item.json.after.endTime || $('Code: Detect Datetime Change').item.json.after.end }}",
+        "additionalFields": {
+          "location": "={{ $('Code: Detect Datetime Change').item.json.after.meetingLink || $('Code: Detect Datetime Change').item.json.after.location }}",
+          "description": "={{ $('Code: Detect Datetime Change').item.json.after.agenda || $('Code: Detect Datetime Change').item.json.after.notes }}",
+          "sendUpdates": "all"
+        }
+      },
+      "id": "a2c2-0005-resched-update-gcal",
+      "name": "GCal: Update Event Time",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [880, 0],
+      "credentials": { "googleCalendarOAuth2Api": { "id": "googleCalendar", "name": "googleCalendar" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/dispatch",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"MULTI\",\n  \"event\": \"appointment_rescheduled\",\n  \"appointmentId\": \"{{ $('Code: Detect Datetime Change').item.json.after.id }}\",\n  \"recipientEmail\": \"{{ $('Code: Detect Datetime Change').item.json.after.customerEmail }}\",\n  \"recipientPhone\": \"{{ $('Code: Detect Datetime Change').item.json.after.customerPhone }}\",\n  \"tenantId\": \"{{ $('Code: Detect Datetime Change').item.json.after.tenantId }}\",\n  \"template\": \"appointment-reschedule\",\n  \"metadata\": {\n    \"newStartTime\": \"{{ $('Code: Detect Datetime Change').item.json.after.startTime }}\",\n    \"newEndTime\": \"{{ $('Code: Detect Datetime Change').item.json.after.endTime }}\",\n    \"workflow\": \"appointment-reschedule\"\n  }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2c2-0006-resched-notify",
+      "name": "Dispatch: Notify Participants",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/crm/interactions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"entityType\": \"CUSTOMER\",\n  \"entityId\": \"{{ $('Code: Detect Datetime Change').item.json.after.customerId }}\",\n  \"type\": \"APPOINTMENT_RESCHEDULED\",\n  \"subject\": \"Appointment rescheduled\",\n  \"description\": \"Appointment {{ $('Code: Detect Datetime Change').item.json.after.id }} rescheduled to {{ $('Code: Detect Datetime Change').item.json.after.startTime }}\",\n  \"tenantId\": \"{{ $('Code: Detect Datetime Change').item.json.after.tenantId }}\",\n  \"metadata\": { \"workflow\": \"appointment-reschedule\", \"appointmentId\": \"{{ $('Code: Detect Datetime Change').item.json.after.id }}\" }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2c2-0007-resched-crm",
+      "name": "Update: CRM Interaction Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"CALENDAR\",\n  \"event\": \"google_calendar_event_updated\",\n  \"appointmentId\": \"{{ $('Code: Detect Datetime Change').item.json.after.id }}\",\n  \"status\": \"SUCCESS\",\n  \"tenantId\": \"{{ $('Code: Detect Datetime Change').item.json.after.tenantId }}\",\n  \"metadata\": { \"workflow\": \"appointment-reschedule\", \"googleEventId\": \"{{ $json.id }}\" }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2c2-0008-resched-audit",
+      "name": "Log: Audit Reschedule",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Webhook: appointment.updated": { "main": [ [ { "node": "Code: Detect Datetime Change", "type": "main", "index": 0 } ] ] },
+    "Code: Detect Datetime Change": { "main": [ [ { "node": "Switch: Process or Skip", "type": "main", "index": 0 } ] ] },
+    "Switch: Process or Skip": { "main": [ [ { "node": "Fetch: External GCal Ref", "type": "main", "index": 0 } ] ] },
+    "Fetch: External GCal Ref": { "main": [ [ { "node": "GCal: Update Event Time", "type": "main", "index": 0 } ] ] },
+    "GCal: Update Event Time": { "main": [ [ { "node": "Dispatch: Notify Participants", "type": "main", "index": 0 } ] ] },
+    "Dispatch: Notify Participants": { "main": [ [ { "node": "Update: CRM Interaction Record", "type": "main", "index": 0 } ] ] },
+    "Update: CRM Interaction Record": { "main": [ [ { "node": "Log: Audit Reschedule", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "calendar" }, { "name": "appointment" }, { "name": "google" }, { "name": "dayjoy" }]
+}

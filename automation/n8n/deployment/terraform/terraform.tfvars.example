@@ -1,0 +1,25 @@
+# Example terraform.tfvars — copy to terraform.tfvars and edit values.
+# Do NOT commit the actual terraform.tfvars (it may contain account IDs).
+
+aws_region                         = "ap-south-1"
+environment                        = "production"
+instance_type                      = "t3.xlarge"
+n8n_version                        = "1.62.0"
+dayjoy_api_url                     = "https://api.dayjoy.ai"
+backup_bucket_name                 = "dayjoy-n8n-backups"
+ebs_kms_key_id                     = "alias/dayjoy-n8n-ebs"
+
+# Cross-stack references (fill in from the platform stack outputs)
+bastion_security_group_id          = "sg-xxxxxxxxxxxxxxxxx"
+platform_db_security_group_id      = "sg-yyyyyyyyyyyyyyyyy"
+platform_redis_security_group_id   = "sg-zzzzzzzzzzzzzzzzz"
+
+# ACM cert for *.dayjoy.ai (or specifically n8n.dayjoy.ai)
+acm_certificate_arn                = "arn:aws:acm:ap-south-1:123456789012:certificate/abcdef01-2345-6789-abcd-ef0123456789"
+
+# Cloudflare
+cloudflare_zone_id                 = "abc123def456ghi789jkl012mno345pq"
+cloudflare_api_token               = "replace-with-cloudflare-api-token"
+
+# PagerDuty SNS topic (already exists in the platform stack)
+pagerduty_sns_topic_arn            = "arn:aws:sns:ap-south-1:123456789012:dayjoy-pagerduty"

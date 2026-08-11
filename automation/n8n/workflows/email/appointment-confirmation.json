@@ -1,0 +1,105 @@
+{
+  "name": "Email — Appointment Confirmation (.ics)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "email/appointment-confirmation",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a2e6-0001-appt-webhook",
+      "name": "Webhook: appointment.created",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "a2e6-appt-webhook-id"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "cond-event", "leftValue": "={{ $json.body.event }}", "rightValue": "appointment.created", "operator": { "type": "string", "operation": "equals" } }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2e6-0002-appt-filter",
+      "name": "Filter: appointment.created",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const a = $input.all()[0].json.body.data;\nconst dtStart = new Date(a.startTime || a.start || a.scheduledAt);\nconst dtEnd = new Date(a.endTime || a.end || new Date(dtStart.getTime() + 60 * 60 * 1000).toISOString());\n// Format dates for ICS: YYYYMMDDTHHMMSSZ\nconst fmtICS = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\\.\\d{3}/, '');\nconst uid = `${a.id}@dayjoy.in`;\nconst dtstamp = fmtICS(new Date());\nconst location = a.type === 'ONLINE' ? (a.meetingLink || 'https://meet.dayjoy.in/' + a.id) : (a.location || '');\nconst attendees = [\n  a.customerEmail ? `ATTENDEE;CN=${a.customerName || 'Customer'};RSVP=TRUE:mailto:${a.customerEmail}` : '',\n  a.employeeEmail ? `ATTENDEE;CN=${a.employeeName || 'Employee'};RSVP=TRUE:mailto:${a.employeeEmail}` : ''\n].filter(Boolean).join('\\r\\n');\nconst ics = [\n  'BEGIN:VCALENDAR',\n  'VERSION:2.0',\n  'PRODID:-//Dayjoy//Appointment//EN',\n  'METHOD:REQUEST',\n  'BEGIN:VEVENT',\n  `UID:${uid}`,\n  `DTSTAMP:${dtstamp}`,\n  `DTSTART:${fmtICS(dtStart)}`,\n  `DTEND:${fmtICS(dtEnd)}`,\n  `SUMMARY:${a.title || 'Dayjoy Appointment'}`,\n  `DESCRIPTION:${(a.agenda || a.notes || '').replace(/\\n/g, '\\\\n')}`,\n  `LOCATION:${location}`,\n  attendees,\n  'ORGANIZER;CN=Dayjoy:mailto:appointments@dayjoy.in',\n  'STATUS:CONFIRMED',\n  'BEGIN:VALARM',\n  'TRIGGER:-PT1H',\n  'ACTION:DISPLAY',\n  'DESCRIPTION:Appointment in 1 hour',\n  'END:VALARM',\n  'END:VEVENT',\n  'END:VCALENDAR'\n].filter(Boolean).join('\\r\\n');\nconst fmtDisplay = (d) => d.toLocaleString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });\nconst html = `\n<!doctype html><html><body style=\"font-family:Arial,Helvetica,sans-serif;color:#1f2937;background:#fff7ed;margin:0;padding:0;\">\n  <div style=\"max-width:560px;margin:0 auto;padding:32px;\">\n    <h1 style=\"color:#ea580c;\">✅ Appointment Confirmed</h1>\n    <p>Hi ${a.customerName || 'Customer'},</p>\n    <p>Your appointment has been confirmed. We've attached a calendar invite (.ics) — open it to add this event to your calendar.</p>\n    <table style=\"width:100%;border-collapse:collapse;margin:16px 0;\">\n      <tr><td style=\"padding:8px;background:#ffedd5;\"><strong>When:</strong></td><td style=\"padding:8px;background:#fff;\">${fmtDisplay(dtStart)} – ${fmtDisplay(dtEnd)}</td></tr>\n      <tr><td style=\"padding:8px;background:#ffedd5;\"><strong>With:</strong></td><td style=\"padding:8px;background:#fff;\">${a.employeeName || 'Dayjoy Team'}</td></tr>\n      <tr><td style=\"padding:8px;background:#ffedd5;\"><strong>Location:</strong></td><td style=\"padding:8px;background:#fff;\">${location || 'To be confirmed'}</td></tr>\n    </table>\n    ${a.type === 'ONLINE' && a.meetingLink ? `<p><a href=\"${a.meetingLink}\" style=\"background:#ea580c;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;display:inline-block;\">Join Meeting →</a></p>` : ''}\n    <p style=\"background:#fef3c7;border-left:4px solid #f59e0b;padding:12px;font-size:14px;\">📅 Open the attached <strong>invite.ics</strong> file to add this to your Google/Outlook/Apple calendar.</p>\n    <hr style=\"margin:24px 0;border:none;border-top:1px solid #fed7aa;\" />\n    <p style=\"font-size:12px;color:#6b7280;\">Dayjoy Wellness Pvt. Ltd. · appointments@dayjoy.in</p>\n  </div>\n</body></html>`;\nreturn [{\n  json: {\n    html,\n    ics,\n    icsFilename: `dayjoy-appointment-${a.id}.ics`,\n    subject: `Appointment Confirmed: ${a.title || 'Dayjoy Appointment'}`,\n    customerEmail: a.customerEmail,\n    appointmentId: a.id,\n    tenantId: a.tenantId\n  }\n}];"
+      },
+      "id": "a2e6-0003-appt-compose",
+      "name": "Code: Compose Email + .ics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "fromEmail": "appointments@dayjoy.in",
+        "toEmail": "={{ $json.customerEmail }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "html": "={{ $json.html }}",
+        "attachments": "attachments",
+        "attachmentParameters": {
+          "attachmentsUi": {
+            "attachmentsValues": [
+              {
+                "filename": "={{ $json.icsFilename }}",
+                "content": "={{ $json.ics }}",
+                "contentType": "text/calendar"
+              }
+            ]
+          }
+        },
+        "options": {}
+      },
+      "id": "a2e6-0004-appt-send",
+      "name": "Send: Confirmation + .ics",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [660, 0],
+      "credentials": { "smtp": { "id": "smtp-cred-id", "name": "smtp" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"EMAIL\",\n  \"event\": \"appointment_confirmation_email_sent\",\n  \"appointmentId\": \"{{ $json.appointmentId }}\",\n  \"recipientEmail\": \"{{ $json.customerEmail }}\",\n  \"status\": \"SENT\",\n  \"tenantId\": \"{{ $json.tenantId }}\",\n  \"metadata\": { \"workflow\": \"appointment-confirmation\", \"attachment\": \"invite.ics\" }\n}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "a2e6-0005-appt-audit",
+      "name": "Log: Audit Confirmation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Webhook: appointment.created": { "main": [ [ { "node": "Filter: appointment.created", "type": "main", "index": 0 } ] ] },
+    "Filter: appointment.created": { "main": [ [ { "node": "Code: Compose Email + .ics", "type": "main", "index": 0 } ] ] },
+    "Code: Compose Email + .ics": { "main": [ [ { "node": "Send: Confirmation + .ics", "type": "main", "index": 0 } ] ] },
+    "Send: Confirmation + .ics": { "main": [ [ { "node": "Log: Audit Confirmation", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveExecutionProgress": true, "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "active": false,
+  "tags": [{ "name": "email" }, { "name": "calendar" }, { "name": "appointment" }, { "name": "dayjoy" }]
+}

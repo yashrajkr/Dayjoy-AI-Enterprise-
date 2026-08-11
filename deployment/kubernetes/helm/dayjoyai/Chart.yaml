@@ -1,0 +1,24 @@
+apiVersion: v2
+name: dayjoyai
+description: Dayjoy AI Platform — Enterprise AI SaaS (Helm Chart)
+type: application
+version: 1.0.0
+appVersion: "0.9.0"
+maintainers:
+  - name: Dayjoy AI Engineering
+    email: engineering@dayjoyai.com
+dependencies:
+  - name: postgresql
+    version: "15.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: "20.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+  - name: qdrant
+    version: "0.x.x"
+    repository: https://qdrant.github.io/qdrant-helm
+    condition: qdrant.enabled
+    tags:
+      - vector-db

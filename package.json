@@ -1,0 +1,51 @@
+{
+  "name": "dayjoy-ai-enterprise",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dayjoy AI Enterprise — Voice AI, WhatsApp AI, RAG, multi-tenant backend",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "backend",
+    "vapi",
+    "rag",
+    "whatsapp-ai"
+  ],
+  "scripts": {
+    "dev": "concurrently -n backend,voice,whatsapp,admin -c blue,green,yellow,magenta \"pnpm --filter backend dev\" \"pnpm --filter vapi dev\" \"pnpm --filter whatsapp-ai dev\" \"pnpm --filter admin-dashboard dev\"",
+    "build": "pnpm -r --filter \"./packages/*\" build && pnpm -r --filter \"./apps/*\" build && pnpm --filter backend build",
+    "start": "pnpm --filter backend start:prod",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "test:e2e": "cd testing/e2e && npx playwright test",
+    "test:load": "python testing/load/load-test.py --base-url http://localhost:3000",
+    "typecheck": "pnpm -r exec tsc --noEmit",
+    "db:generate": "prisma generate --schema database/prisma/schema.prisma",
+    "db:migrate": "prisma migrate deploy --schema database/prisma/schema.prisma",
+    "db:migrate:deploy": "prisma migrate deploy --schema database/prisma/schema.prisma",
+    "db:migrate:dev": "prisma migrate dev --schema database/prisma/schema.prisma",
+    "db:seed": "cd database && npx tsx seed/seed.ts",
+    "db:studio": "prisma studio --schema database/prisma/schema.prisma",
+    "db:reset": "cd database && psql -d dayjoy_ai -c \"DROP SCHEMA public CASCADE; CREATE SCHEMA public;\" && prisma migrate deploy --schema ../database/prisma/schema.prisma && cd .. && pnpm db:seed",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "docker:build": "docker compose build",
+    "setup": "bash deployment/scripts/setup.sh",
+    "deploy": "bash deployment/scripts/deploy.sh",
+    "backup": "bash deployment/scripts/backup-postgres.sh",
+    "verify": "bash deployment/scripts/verify.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "concurrently": "^8.2.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

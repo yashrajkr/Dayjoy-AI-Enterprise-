@@ -1,0 +1,103 @@
+# =============================================================================
+# Dayjoy n8n — Service (ClusterIP)
+# Internal service for n8n-main. Exposed externally via the Ingress.
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n-main
+  namespace: dayjoy-n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: main
+    app.kubernetes.io/part-of: dayjoy-ai-enterprise
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: main
+  ports:
+    - name: http
+      port: 5678
+      targetPort: http
+      protocol: TCP
+---
+# Headless service for the worker (no inbound traffic, but stable DNS for metrics scraping)
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n-worker
+  namespace: dayjoy-n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: dayjoy-ai-enterprise
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "5678"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  clusterIP: None  # headless — Prometheus scrapes each pod directly
+  selector:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: worker
+  ports:
+    - name: http
+      port: 5678
+      targetPort: http
+      protocol: TCP
+---
+# ConfigMap with non-secret n8n configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: n8n-config
+  namespace: dayjoy-n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/part-of: dayjoy-ai-enterprise
+data:
+  N8N_HOST: "n8n.dayjoy.ai"
+  N8N_PORT: "5678"
+  N8N_PROTOCOL: "https"
+  WEBHOOK_URL: "https://n8n.dayjoy.ai/"
+  GENERIC_TIMEZONE: "Asia/Kolkata"
+  N8N_DIAGNOSTICS_ENABLED: "false"
+  N8N_PERSONALIZATION_ENABLED: "false"
+  N8N_USER_MANAGEMENT_DISABLED: "false"
+  N8N_HIRING_BANNER_ENABLED: "false"
+  N8N_VERSION_NOTIFICATIONS_ENABLED: "true"
+  N8N_TEMPLATES_ENABLED: "false"
+  N8N_METRICS: "true"
+  N8N_METRICS_PREFIX: "dayjoy_n8n_"
+  N8N_LOG_LEVEL: "info"
+  N8N_LOG_OUTPUT: "console"
+  N8N_BASIC_AUTH_ACTIVE: "true"
+  EXECUTIONS_DATA_PRUNE: "true"
+  EXECUTIONS_DATA_MAX_AGE: "336"
+  EXECUTIONS_DATA_PRUNE_TIMEOUT: "3600"
+  EXECUTIONS_DATA_SAVE_ON_ERROR: "all"
+  EXECUTIONS_DATA_SAVE_ON_SUCCESS: "all"
+  EXECUTIONS_DATA_SAVE_ON_PROGRESS: "true"
+  EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS: "true"
+  DB_TYPE: "postgresdb"
+  DAYJOY_API_URL: "https://api.dayjoy.ai"
+  WHATSAPP_API_URL: "https://graph.facebook.com/v21.0"
+  SMTP_HOST: "smtp.sendgrid.net"
+  SMTP_PORT: "587"
+  SMTP_USER: "apikey"
+  SMTP_FROM: "no-reply@dayjoy.ai"
+  PROMETHEUS_PUSHGATEWAY_URL: "http://prometheus-pushgateway.monitoring.svc.cluster.local:9091"
+---
+# ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: n8n-main
+  namespace: dayjoy-n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/part-of: dayjoy-ai-enterprise
+automountServiceAccountToken: false

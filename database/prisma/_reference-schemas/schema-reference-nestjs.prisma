@@ -1,0 +1,334 @@
+// Dayjoy Enterprise AI Platform - Prisma Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+enum TenantStatus { ACTIVE SUSPENDED DELETED }
+enum UserStatus { ACTIVE INACTIVE SUSPENDED DELETED }
+enum CustomerType { INDIVIDUAL BUSINESS }
+enum DistributorStatus { ACTIVE INACTIVE SUSPENDED DELETED }
+enum ProductStatus { ACTIVE INACTIVE DELETED }
+enum LeadStatus { NEW CONTACTED QUALIFIED CONVERTED LOST DELETED }
+enum InteractionType { CALL EMAIL MEETING MESSAGE NOTE OTHER }
+enum ChannelType { VOICE WHATSAPP WEB API }
+enum AgentType { SUPPORT SALES ONBOARDING TECHNICAL BILLING DISTRIBUTOR ADMIN VOICE WHATSAPP WEB }
+enum MemoryType { FACT PREFERENCE HISTORY CONTEXT }
+enum OrderStatus { PENDING PROCESSING COMPLETED CANCELLED }
+
+// Core Models
+model Tenant {
+  id        String        @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String        @unique
+  status    TenantStatus  @default(ACTIVE)
+  settings  Json?
+  createdAt DateTime      @default(now()) @db.Timestamptz
+  updatedAt DateTime      @default(now()) @db.Timestamptz
+  users         User[]
+  roles         Role[]
+  productCategories ProductCategory[]
+  products      Product[]
+  customers     Customer[]
+  distributors  Distributor[]
+  orders        Order[]
+  leads         Lead[]
+  interactions  Interaction[]
+  followUps     FollowUp[]
+  aiAgents      AiAgent[]
+  conversations Conversation[]
+  messages      Message[]
+  aiMemory      AiMemory[]
+  ragSources    RagSource[]
+  ragDocuments  RagDocument[]
+  ragChunks     RagChunk[]
+  embeddings    Embedding[]
+  @@map("tenants")
+}
+
+model User {
+  id           String      @id @default(uuid()) @db.Uuid
+  tenantId     String      @db.Uuid
+  email        String      @unique
+  passwordHash String?
+  phone        String?
+  firstName    String?
+  lastName     String?
+  status       UserStatus  @default(ACTIVE)
+  lastLoginAt  DateTime?   @db.Timestamptz
+  createdAt    DateTime    @default(now()) @db.Timestamptz
+  updatedAt    DateTime    @default(now()) @db.Timestamptz
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userRoles   UserRole[]
+  customers   Customer[]
+  conversations Conversation[]
+  @@map("users")
+  @@index([tenantId])
+  @@index([email])
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  name        String
+  description String?
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  updatedAt   DateTime @default(now()) @db.Timestamptz
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+  @@map("roles")
+  @@unique([tenantId, name], name: "roles_tenant_id_name_unique")
+  @@index([tenantId])
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  resource    String
+  action      String
+  description String?
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  rolePermissions RolePermission[]
+  @@map("permissions")
+  @@unique([resource, action])
+  @@index([resource])
+}
+
+model RolePermission {
+  roleId      String   @db.Uuid
+  permissionId String  @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId     String   @db.Uuid
+  roleId     String   @db.Uuid
+  tenantId   String   @db.Uuid
+  assignedAt DateTime @default(now()) @db.Timestamptz
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model ProductCategory {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  parentId    String?  @db.Uuid
+  name        String
+  slug        String
+  description String?
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  updatedAt   DateTime @default(now()) @db.Timestamptz
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  products Product[]
+  @@map("product_categories")
+  @@unique([tenantId, slug])
+}
+
+model Product {
+  id             String        @id @default(uuid()) @db.Uuid
+  tenantId       String        @db.Uuid
+  categoryId     String?       @db.Uuid
+  sku            String
+  name           String
+  description    String?
+  price          Decimal       @db.Numeric(12, 2)
+  cost           Decimal?      @db.Numeric(12, 2)
+  currency       String        @default("USD")
+  inventoryCount Int           @default(0)
+  attributes     Json?
+  status         ProductStatus @default(ACTIVE)
+  createdAt      DateTime      @default(now()) @db.Timestamptz
+  updatedAt      DateTime      @default(now()) @db.Timestamptz
+  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category ProductCategory? @relation(fields: [categoryId], references: [id])
+  orderItems OrderItem[]
+  @@map("products")
+  @@unique([tenantId, sku])
+}
+
+model Customer {
+  id           String       @id @default(uuid()) @db.Uuid
+  tenantId     String       @db.Uuid
+  customerType CustomerType @default(INDIVIDUAL)
+  companyName  String?
+  firstName    String?
+  lastName     String?
+  email        String?
+  phone        String?
+  address      Json?
+  status       String        @default("active")
+  createdAt    DateTime     @default(now()) @db.Timestamptz
+  updatedAt    DateTime     @default(now()) @db.Timestamptz
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orders  Order[]
+  @@map("customers")
+  @@index([tenantId])
+  @@index([email])
+}
+
+model Order {
+  id            String       @id @default(uuid()) @db.Uuid
+  tenantId      String       @db.Uuid
+  customerId    String       @db.Uuid
+  orderNumber   String       @unique
+  status        OrderStatus  @default(PENDING)
+  subtotal      Decimal      @default(0) @db.Numeric(12, 2)
+  tax           Decimal      @default(0) @db.Numeric(12, 2)
+  total         Decimal      @default(0) @db.Numeric(12, 2)
+  currency      String       @default("USD")
+  createdAt     DateTime     @default(now()) @db.Timestamptz
+  updatedAt     DateTime     @default(now()) @db.Timestamptz
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer    Customer    @relation(fields: [customerId], references: [id])
+  items       OrderItem[]
+  @@map("orders")
+  @@index([tenantId])
+}
+
+model OrderItem {
+  id         String   @id @default(uuid()) @db.Uuid
+  orderId    String   @db.Uuid
+  productId  String   @db.Uuid
+  quantity   Int      @default(1)
+  unitPrice  Decimal  @default(0) @db.Numeric(12, 2)
+  subtotal   Decimal  @default(0) @db.Numeric(12, 2)
+  total      Decimal  @default(0) @db.Numeric(12, 2)
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+  @@map("order_items")
+  @@index([orderId])
+}
+
+model Lead {
+  id         String     @id @default(uuid()) @db.Uuid
+  tenantId   String     @db.Uuid
+  firstName  String?
+  lastName   String?
+  email      String?
+  phone      String?
+  company    String?
+  status     LeadStatus @default(NEW)
+  score      Int        @default(0)
+  createdAt  DateTime   @default(now()) @db.Timestamptz
+  updatedAt  DateTime   @default(now()) @db.Timestamptz
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@map("leads")
+  @@index([tenantId])
+  @@index([email])
+}
+
+model AiAgent {
+  id           String    @id @default(uuid()) @db.Uuid
+  tenantId     String    @db.Uuid
+  name         String
+  type         AgentType
+  description  String?
+  configuration Json?
+  capabilities Json?
+  status       String    @default("active")
+  createdAt    DateTime  @default(now()) @db.Timestamptz
+  updatedAt    DateTime  @default(now()) @db.Timestamptz
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  @@map("ai_agents")
+}
+
+model Conversation {
+  id          String      @id @default(uuid()) @db.Uuid
+  tenantId    String      @db.Uuid
+  agentId     String      @db.Uuid
+  userId      String?     @db.Uuid
+  customerId  String?     @db.Uuid
+  channel     ChannelType
+  status      String      @default("active")
+  startedAt   DateTime    @default(now()) @db.Timestamptz
+  updatedAt   DateTime    @default(now()) @db.Timestamptz
+  tenant   Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent    AiAgent @relation(fields: [agentId], references: [id])
+  messages Message[]
+  @@map("conversations")
+}
+
+model Message {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @db.Uuid
+  conversationId String   @db.Uuid
+  role           String
+  content        String
+  contentType    String   @default("text")
+  createdAt      DateTime @default(now()) @db.Timestamptz
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  @@map("messages")
+}
+
+model RagSource {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @db.Uuid
+  name         String
+  type         String
+  description  String?
+  configuration Json?
+  status       String   @default("active")
+  createdAt    DateTime @default(now()) @db.Timestamptz
+  updatedAt    DateTime @default(now()) @db.Timestamptz
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  documents RagDocument[]
+  @@map("rag_sources")
+}
+
+model RagDocument {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  sourceId    String   @db.Uuid
+  title       String
+  content     String?
+  wordCount   Int?
+  status      String   @default("processed")
+  createdAt   DateTime  @default(now()) @db.Timestamptz
+  updatedAt   DateTime  @default(now()) @db.Timestamptz
+  tenant  Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  source  RagSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  chunks  RagChunk[]
+  @@map("rag_documents")
+}
+
+model RagChunk {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  documentId  String   @db.Uuid
+  chunkIndex  Int
+  content     String
+  embedding   Bytes?
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  tenant   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document RagDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  @@map("rag_chunks")
+  @@unique([documentId, chunkIndex])
+}
+
+model Embedding {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  entityType  String
+  entityId    String   @db.Uuid
+  embedding   Bytes
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@map("embeddings")
+}

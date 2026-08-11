@@ -1,0 +1,531 @@
+{
+  "name": "Leads — Capture & Onboard",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-capture",
+        "responseMode": "responseNode",
+        "options": {
+          "rawData": true,
+          "binaryPropertyName": "data"
+        }
+      },
+      "id": "a1-lead-capture-001",
+      "name": "Lead Created Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "d7c1f4a1-lead-capture-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify Dayjoy webhook HMAC-SHA256 signature + replay window + event type\nconst crypto = require('crypto');\n\nconst headers = items[0].json.headers || {};\nconst secret = process.env.DAYJOY_WEBHOOK_SECRET;\n\nconst signature = headers['x-dayjoy-signature'];\nconst timestamp = headers['x-dayjoy-timestamp'];\nconst eventId   = headers['x-dayjoy-event-id'];\nconst eventType = headers['x-dayjoy-event'];\n\nif (!signature || !timestamp || !eventId || !eventType) {\n  throw new Error('Missing required Dayjoy webhook headers');\n}\n\nconst now = Math.floor(Date.now() / 1000);\nif (Math.abs(now - parseInt(timestamp, 10)) > 300) {\n  throw new Error('Webhook timestamp out of 5-minute window');\n}\n\nconst bodyBuffer = await this.helpers.getBinaryDataBuffer(items[0], 'data');\nconst expected = 'sha256=' + crypto.createHmac('sha256', secret).update(bodyBuffer).digest('hex');\nconst sigBuf = Buffer.from(signature);\nconst expBuf = Buffer.from(expected);\nif (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {\n  throw new Error('Invalid webhook signature');\n}\n\nconst ALLOWED_EVENTS = ['lead.created'];\nif (!ALLOWED_EVENTS.includes(eventType)) {\n  throw new Error('Unexpected event type: ' + eventType);\n}\n\nconst payload = JSON.parse(bodyBuffer.toString('utf8'));\npayload._meta = { eventId, eventType, receivedAt: new Date().toISOString() };\nreturn [{ json: payload }];"
+      },
+      "id": "a1-lead-capture-002",
+      "name": "Verify HMAC Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "notesInFlow": true,
+      "notes": "See shared/webhook-auth.md — rejects invalid signatures, stale timestamps, unexpected events"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/automation/event-dedup",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_AUTOMATION_JWT }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"eventId\":\"{{ $json._meta.eventId }}\"}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          },
+          "retry": {
+            "enabled": true,
+            "maxTries": 3,
+            "retryInterval": 1000
+          }
+        }
+      },
+      "id": "a1-lead-capture-003",
+      "name": "Event Dedup Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "alwaysOutputData": false,
+      "notesInFlow": true,
+      "notes": "POST /api/automation/event-dedup — 201 first time, 409 duplicate"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "value2": 409,
+              "operation": "equal",
+              "outputKey": "duplicate"
+            },
+            {
+              "value2": 201,
+              "operation": "equal",
+              "outputKey": "new"
+            }
+          ]
+        },
+        "fallbackOutput": 2
+      },
+      "id": "a1-lead-capture-004",
+      "name": "Duplicate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true,\"dedup\":true,\"eventId\":\"{{ $('Verify HMAC Signature').item.json._meta.eventId }}\"}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a1-lead-capture-005",
+      "name": "Respond 200 Dedup",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"firstName\":\"{{ $json.firstName || '' }}\",\"lastName\":\"{{ $json.lastName || '' }}\",\"email\":\"{{ $json.email || '' }}\",\"phone\":\"{{ $json.phone || '' }}\",\"company\":\"{{ $json.company || '' }}\",\"source\":\"{{ $json.source || 'WEB' }}\",\"sourceDetails\":{{ JSON.stringify($json.sourceDetails || {}) }},\"language\":\"{{ $json.language || 'en' }}\",\"territory\":\"{{ $json.territory || '' }}\",\"metadata\":{ \"capturedAt\": \"{{ $json.capturedAt || new Date().toISOString() }}\", \"channel\": \"{{ $json.channel || 'website' }}\" }}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-capture-006",
+      "name": "Create Lead in CRM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 360],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notesInFlow": true,
+      "notes": "POST /api/leads — creates lead in CRM with source attribution"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/distributors/available",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-capture-007",
+      "name": "Get Available Reps",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 360],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notesInFlow": true,
+      "notes": "GET /api/distributors/available — fetches reps filtered by territory, language, workload"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pick best rep: territory match > language match > round-robin (lowest current workload)\nconst lead = $('Create Lead in CRM').item.json;\nconst reps = $json.data || $json.reps || [];\nif (!reps.length) {\n  return [{ json: { assignedRepId: null, assignmentReason: 'no_reps_available' } }];\n}\n\nconst territory = lead.territory || '';\nconst language = lead.language || 'en';\n\n// 1. Exact territory + language match\nlet candidates = reps.filter(r => r.territory === territory && r.languages && r.languages.includes(language));\nlet reason = 'territory+language';\n\n// 2. Territory match only\nif (!candidates.length) {\n  candidates = reps.filter(r => r.territory === territory);\n  reason = 'territory';\n}\n\n// 3. Language match only\nif (!candidates.length) {\n  candidates = reps.filter(r => r.languages && r.languages.includes(language));\n  reason = 'language';\n}\n\n// 4. Round-robin (lowest workload)\nif (!candidates.length) {\n  candidates = reps;\n  reason = 'round-robin';\n}\n\ncandidates.sort((a, b) => (a.activeLeads || 0) - (b.activeLeads || 0));\nconst assigned = candidates[0];\n\nreturn [{\n  json: {\n    leadId: lead.id || lead.data?.id,\n    assignedRepId: assigned.id,\n    assignedRepName: assigned.name,\n    assignedRepEmail: assigned.email,\n    assignedRepPhone: assigned.phone,\n    assignmentReason: reason,\n    leadFirstName: lead.firstName,\n    leadLastName: lead.lastName,\n    leadEmail: lead.email,\n    leadPhone: lead.phone\n  }\n}];"
+      },
+      "id": "a1-lead-capture-008",
+      "name": "Compute Assignment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 360],
+      "notesInFlow": true,
+      "notes": "Round-robin assignment: territory > language > workload"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads/{{ $json.leadId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"assignedTo\":\"{{ $json.assignedRepId }}\",\"assignmentReason\":\"{{ $json.assignmentReason }}\",\"status\":\"ASSIGNED\",\"assignedAt\":\"{{ new Date().toISOString() }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-capture-009",
+      "name": "Assign Lead to Rep",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 360],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notesInFlow": true,
+      "notes": "PUT /api/leads/:id — assign rep + flip status to ASSIGNED"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"EMAIL\",\"recipient\":\"{{ $('Compute Assignment').item.json.leadEmail }}\",\"template\":\"LEAD_WELCOME\",\"context\":{\"firstName\":\"{{ $('Compute Assignment').item.json.leadFirstName }}\",\"assignedRepName\":\"{{ $('Compute Assignment').item.json.assignedRepName }}\"}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-capture-010",
+      "name": "Send Welcome Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notesInFlow": true,
+      "notes": "POST /api/notifications/send — welcome email to the new lead"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/notifications/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"channel\":\"IN_APP\",\"recipient\":\"{{ $('Compute Assignment').item.json.assignedRepId }}\",\"template\":\"LEAD_ASSIGNED\",\"context\":{\"leadName\":\"{{ $('Compute Assignment').item.json.leadFirstName }} {{ $('Compute Assignment').item.json.leadLastName }}\",\"leadPhone\":\"{{ $('Compute Assignment').item.json.leadPhone }}\",\"leadEmail\":\"{{ $('Compute Assignment').item.json.leadEmail }}\",\"priority\":\"HIGH\"}}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-capture-011",
+      "name": "Notify Assigned Rep",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 420],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notesInFlow": true,
+      "notes": "POST /api/notifications/send — in-app HIGH priority alert to assigned rep"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads/{{ $('Compute Assignment').item.json.leadId }}/tasks",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"type\":\"FOLLOW_UP_CALL\",\"title\":\"Follow-up call with {{ $('Compute Assignment').item.json.leadFirstName }}\",\"dueAt\":\"{{ $today.plus({days:1}).toISO() }}\",\"assigneeId\":\"{{ $('Compute Assignment').item.json.assignedRepId }}\",\"priority\":\"HIGH\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-capture-012",
+      "name": "Schedule Follow-up Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 360],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notesInFlow": true,
+      "notes": "POST /api/leads/:id/tasks — schedule follow-up call task for tomorrow"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/ai/conversations/lead-{{ $('Compute Assignment').item.json.leadId }}/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"role\":\"system\",\"content\":\"Score this lead from 0-100 based on data completeness, source quality, and engagement signals. Return JSON {score: number, reason: string, signals: string[]}.\",\"context\":{\"lead\":{{ JSON.stringify($('Create Lead in CRM').item.json) }}},\"responseFormat\":\"json\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-capture-013",
+      "name": "AI Score Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, 360],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notesInFlow": true,
+      "notes": "POST /api/ai/conversations/:id/messages — AI lead scoring call"
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $json.body || $json;\nlet score = 50;\nlet reason = 'default';\ntry {\n  const parsed = typeof resp === 'string' ? JSON.parse(resp) : resp;\n  if (parsed.data) parsed = parsed.data;\n  score = typeof parsed.score === 'number' ? parsed.score : 50;\n  reason = parsed.reason || 'default';\n} catch (e) {}\nreturn [{ json: { leadId: $('Compute Assignment').item.json.leadId, score, reason, scoredAt: new Date().toISOString() } }];"
+      },
+      "id": "a1-lead-capture-014",
+      "name": "Parse Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2420, 360]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/leads/{{ $json.leadId }}/score",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"score\":{{ $json.score }},\"scoreReason\":\"{{ $json.reason }}\",\"scoredAt\":\"{{ $json.scoredAt }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-capture-015",
+      "name": "Update Lead Score",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2640, 360],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notesInFlow": true,
+      "notes": "PATCH /api/leads/:id/score — persist AI-generated lead score"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true,\"eventId\":\"{{ $('Verify HMAC Signature').item.json._meta.eventId }}\",\"leadId\":\"{{ $('Compute Assignment').item.json.leadId }}\"}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a1-lead-capture-016",
+      "name": "Respond 200 Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2860, 360]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"error\":\"invalid_signature\"}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "a1-lead-capture-017",
+      "name": "Respond 401 Auth",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [220, 540]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/audit-log",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"event\":\"automation.webhook.signature_failed\",\"severity\":\"HIGH\",\"meta\":{\"workflow\":\"Lead Capture Automation\",\"error\":\"{{ $json.error?.message || $json.message || 'unknown' }}\"}}",
+        "options": {
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-lead-capture-018",
+      "name": "Log Auth Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 540],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    }
+  ],
+  "connections": {
+    "Lead Created Webhook": {
+      "main": [
+        [
+          { "node": "Verify HMAC Signature", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Verify HMAC Signature": {
+      "main": [
+        [
+          { "node": "Event Dedup Check", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Event Dedup Check": {
+      "main": [
+        [
+          { "node": "Duplicate?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Duplicate?": {
+      "main": [
+        [
+          { "node": "Respond 200 Dedup", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Create Lead in CRM", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Respond 401 Auth", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Create Lead in CRM": {
+      "main": [
+        [
+          { "node": "Get Available Reps", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Get Available Reps": {
+      "main": [
+        [
+          { "node": "Compute Assignment", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Compute Assignment": {
+      "main": [
+        [
+          { "node": "Assign Lead to Rep", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Assign Lead to Rep": {
+      "main": [
+        [
+          { "node": "Send Welcome Notification", "type": "main", "index": 0 },
+          { "node": "Notify Assigned Rep", "type": "main", "index": 0 },
+          { "node": "Schedule Follow-up Task", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Schedule Follow-up Task": {
+      "main": [
+        [
+          { "node": "AI Score Lead", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "AI Score Lead": {
+      "main": [
+        [
+          { "node": "Parse Score", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Score": {
+      "main": [
+        [
+          { "node": "Update Lead Score", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Update Lead Score": {
+      "main": [
+        [
+          { "node": "Respond 200 Success", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Respond 401 Auth": {
+      "main": [
+        [
+          { "node": "Log Auth Failure", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "tags": [
+    { "name": "leads" },
+    { "name": "crm" },
+    { "name": "agent-a1" }
+  ],
+  "meta": {
+    "templateCreatedBy": "Agent A1 — CRM/Sales/Leads",
+    "description": "Triggered by lead.created webhook from Voice AI / WhatsApp AI / Website AI / manual entry. Creates CRM lead, assigns rep via territory+language+round-robin, sends welcome + assignment notifications, schedules follow-up task, runs AI scoring. Full HMAC verification + dedup + retries."
+  }
+}

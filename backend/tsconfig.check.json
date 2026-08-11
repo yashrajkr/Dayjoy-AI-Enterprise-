@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2022",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "rootDir": "..",
+    "baseUrl": "./",
+    "incremental": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noEmit": true,
+    "paths": {
+      "@app/*": ["./*"],
+      "@shared/*": ["./_shared/*"],
+      "@rag/*": ["../rag/*"],
+      "@vapi/*": ["../vapi/*"],
+      "@whatsapp/*": ["../whatsapp-ai/*"]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "../rag/**/*.ts",
+    "../vapi/**/*.ts",
+    "../whatsapp-ai/**/*.ts",
+    "../node_modules/.prisma/client/index.d.ts"
+  ],
+  "exclude": ["node_modules", "dist", "test", "_express-reference", "automation"]
+}

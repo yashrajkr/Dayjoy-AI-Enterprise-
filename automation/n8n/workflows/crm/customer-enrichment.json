@@ -1,0 +1,259 @@
+{
+  "name": "CRM — Customer AI Enrichment",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "crm-customer-enrichment",
+        "responseMode": "responseNode",
+        "options": {
+          "rawData": true,
+          "binaryPropertyName": "data"
+        }
+      },
+      "id": "a1-crm-enr-001",
+      "name": "Customer Created Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "e7b2a4f1-crm-customer-enrichment-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst headers = items[0].json.headers || {};\nconst secret = process.env.DAYJOY_WEBHOOK_SECRET;\nconst signature = headers['x-dayjoy-signature'];\nconst timestamp = headers['x-dayjoy-timestamp'];\nconst eventId = headers['x-dayjoy-event-id'];\nconst eventType = headers['x-dayjoy-event'];\nif (!signature || !timestamp || !eventId || !eventType) throw new Error('Missing required headers');\nif (Math.abs(Math.floor(Date.now()/1000) - parseInt(timestamp,10)) > 300) throw new Error('Stale timestamp');\nconst bodyBuffer = await this.helpers.getBinaryDataBuffer(items[0], 'data');\nconst expected = 'sha256=' + crypto.createHmac('sha256', secret).update(bodyBuffer).digest('hex');\nconst sigBuf = Buffer.from(signature), expBuf = Buffer.from(expected);\nif (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) throw new Error('Invalid signature');\nconst ALLOWED = ['customer.created'];\nif (!ALLOWED.includes(eventType)) throw new Error('Unexpected event: ' + eventType);\nconst payload = JSON.parse(bodyBuffer.toString('utf8'));\npayload._meta = { eventId, eventType, receivedAt: new Date().toISOString() };\nreturn [{ json: payload }];"
+      },
+      "id": "a1-crm-enr-002",
+      "name": "Verify HMAC Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/automation/event-dedup",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.DAYJOY_AUTOMATION_JWT }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"eventId\":\"{{ $json._meta.eventId }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-enr-003",
+      "name": "Event Dedup Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build AI enrichment prompt from customer signals\nconst c = items[0].json;\nconst customer = c.customer || c;\n\nreturn [{\n  json: {\n    customerId: customer.id || c.customerId,\n    customer,\n    prompt: `Analyze this customer and return JSON with the following fields:\n- customerType: 'INDIVIDUAL' | 'RESELLER' | 'SMB' | 'ENTERPRISE'\n- potentialValue: integer (estimated lifetime value in INR, 0-500000)\n- confidence: 0-100 (how confident in the estimate)\n- recommendedProducts: array of product category strings (max 5)\n- segmentTags: array of strings (max 5)\n- reasoning: brief string explaining the analysis\n\nCustomer data:\n${JSON.stringify({\n  firstName: customer.firstName,\n  lastName: customer.lastName,\n  email: customer.email,\n  phone: customer.phone,\n  company: customer.company,\n  territory: customer.territory,\n  referredBy: customer.referredBy ? 'yes' : 'no'\n}, null, 2)}`\n  }\n}];"
+      },
+      "id": "a1-crm-enr-004",
+      "name": "Build Enrichment Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300],
+      "notes": "Prompt asks AI for: customerType, potentialValue (INR), confidence %, recommendedProducts, segmentTags, reasoning"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/ai/conversations/customer-{{ $json.customerId }}/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"role\":\"system\",\"content\":\"{{ $json.prompt }}\",\"context\":{\"entityType\":\"customer\",\"entityId\":\"{{ $json.customerId }}\"},\"responseFormat\":\"json\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-enr-005",
+      "name": "AI Enrich Customer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "POST /api/ai/conversations/:id/messages — AI customer analysis"
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $json.body || $json;\nlet enrichment = {\n  customerType: 'INDIVIDUAL',\n  potentialValue: 0,\n  confidence: 0,\n  recommendedProducts: [],\n  segmentTags: [],\n  reasoning: 'AI enrichment failed — using defaults'\n};\ntry {\n  let parsed = typeof resp === 'string' ? JSON.parse(resp) : resp;\n  if (parsed.data) parsed = parsed.data;\n  if (parsed.content) parsed = typeof parsed.content === 'string' ? JSON.parse(parsed.content) : parsed.content;\n  enrichment = {\n    customerType: parsed.customerType || 'INDIVIDUAL',\n    potentialValue: parseInt(parsed.potentialValue, 10) || 0,\n    confidence: parseInt(parsed.confidence, 10) || 0,\n    recommendedProducts: Array.isArray(parsed.recommendedProducts) ? parsed.recommendedProducts.slice(0, 5) : [],\n    segmentTags: Array.isArray(parsed.segmentTags) ? parsed.segmentTags.slice(0, 5) : [],\n    reasoning: parsed.reasoning || 'no reasoning provided'\n  };\n} catch (e) {\n  // keep defaults\n}\nreturn [{\n  json: {\n    customerId: $('Build Enrichment Prompt').item.json.customerId,\n    enrichment,\n    enrichedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "a1-crm-enr-006",
+      "name": "Parse Enrichment Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300],
+      "notes": "Parses AI JSON response. Falls back to defaults if AI response is malformed."
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/customers/{{ $json.customerId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"customerType\":\"{{ $json.enrichment.customerType }}\",\"potentialValue\":{{ $json.enrichment.potentialValue }},\"enrichmentConfidence\":{{ $json.enrichment.confidence }},\"recommendedProducts\":{{ JSON.stringify($json.enrichment.recommendedProducts) }},\"segmentTags\":{{ JSON.stringify($json.enrichment.segmentTags) }},\"enrichmentReasoning\":\"{{ $json.enrichment.reasoning }}\",\"enrichedAt\":\"{{ $json.enrichedAt }}\"}",
+        "options": {
+          "response": { "response": { "fullResponse": true } },
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-enr-007",
+      "name": "Update Customer Metadata",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } },
+      "notes": "PUT /api/customers/:id — persist enrichment: customerType, potentialValue, recommendedProducts, segmentTags"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DAYJOY_API_BASE_URL }}/api/audit-log",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"event\":\"customer.enriched\",\"severity\":\"INFO\",\"meta\":{\"customerId\":\"{{ $json.customerId }}\",\"customerType\":\"{{ $json.enrichment.customerType }}\",\"potentialValue\":{{ $json.enrichment.potentialValue }},\"confidence\":{{ $json.enrichment.confidence }}}}",
+        "options": {
+          "retry": { "enabled": true, "maxTries": 3, "retryInterval": 1000 }
+        }
+      },
+      "id": "a1-crm-enr-008",
+      "name": "Log Enrichment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 300],
+      "credentials": { "httpHeaderAuth": { "id": "dayjoyApi", "name": "dayjoyApi" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true,\"eventId\":\"{{ $('Verify HMAC Signature').item.json._meta.eventId }}\",\"customerId\":\"{{ $json.customerId }}\",\"customerType\":\"{{ $json.enrichment.customerType }}\"}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "a1-crm-enr-009",
+      "name": "Respond 200 Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1760, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"error\":\"invalid_signature\"}",
+        "options": { "responseCode": 401 }
+      },
+      "id": "a1-crm-enr-010",
+      "name": "Respond 401 Auth",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [220, 540]
+    }
+  ],
+  "connections": {
+    "Customer Created Webhook": {
+      "main": [
+        [
+          { "node": "Verify HMAC Signature", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Verify HMAC Signature": {
+      "main": [
+        [
+          { "node": "Event Dedup Check", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Event Dedup Check": {
+      "main": [
+        [
+          { "node": "Build Enrichment Prompt", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Enrichment Prompt": {
+      "main": [
+        [
+          { "node": "AI Enrich Customer", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "AI Enrich Customer": {
+      "main": [
+        [
+          { "node": "Parse Enrichment Result", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Enrichment Result": {
+      "main": [
+        [
+          { "node": "Update Customer Metadata", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Update Customer Metadata": {
+      "main": [
+        [
+          { "node": "Log Enrichment", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Log Enrichment": {
+      "main": [
+        [
+          { "node": "Respond 200 Success", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "tags": [
+    { "name": "crm" },
+    { "name": "ai" },
+    { "name": "agent-a1" }
+  ],
+  "meta": {
+    "templateCreatedBy": "Agent A1 — CRM/Sales/Leads",
+    "description": "Triggered by customer.created. Calls AI to analyze customer (based on phone, email, name, company, territory). Enriches: customerType (INDIVIDUAL/RESELLER/SMB/ENTERPRISE), potentialValue (INR LTV estimate), recommendedProducts, segmentTags. Updates customer metadata. Falls back to defaults if AI fails."
+  }
+}

@@ -1,0 +1,255 @@
+# =====================================================
+# Dayjoy AI Enterprise — Root docker-compose
+# Single-command dev environment for the whole stack
+# =====================================================
+# Usage:
+#   docker compose up -d                    # start everything
+#   docker compose up postgres redis        # start only infra
+#   docker compose logs -f backend          # tail backend logs
+#   docker compose down -v                  # stop + delete volumes
+
+version: "3.9"
+
+services:
+  # ---------- Infrastructure ----------
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: dayjoy-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dayjoy
+      POSTGRES_PASSWORD: dayjoy
+      POSTGRES_DB: dayjoy_ai
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dayjoy -d dayjoy_ai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: dayjoy-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------- Backend ----------
+  backend:
+    build:
+      context: .
+      dockerfile: ./backend/Dockerfile
+    container_name: dayjoy-backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql://dayjoy:dayjoy@postgres:5432/dayjoy_ai
+      - REDIS_URL=redis://redis:6379
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+      - ./packages:/app/packages
+      - ./shared:/app/shared
+      - ./database:/app/database
+      - /app/node_modules
+      - /app/backend/node_modules
+    command: node backend/dist/main.js
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ---------- Voice AI (Vapi) ----------
+  voice-ai:
+    build:
+      context: ./vapi
+      dockerfile: Dockerfile
+    container_name: dayjoy-voice-ai
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql://dayjoy:dayjoy@postgres:5432/dayjoy_ai
+      - REDIS_URL=redis://redis:6379
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---------- WhatsApp AI ----------
+  whatsapp-ai:
+    build:
+      context: ./whatsapp-ai
+      dockerfile: Dockerfile
+    container_name: dayjoy-whatsapp-ai
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql://dayjoy:dayjoy@postgres:5432/dayjoy_ai
+      - REDIS_URL=redis://redis:6379
+    ports:
+      - "3002:3002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---------- Frontend (Admin Dashboard) ----------
+  admin-dashboard:
+    build:
+      context: ./apps/admin-dashboard
+      dockerfile: Dockerfile
+    container_name: dayjoy-admin
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:3000
+    ports:
+      - "3003:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # ---------- Object Storage (MinIO) ----------
+  # Used by the RAG ingestion pipeline for uploading source documents
+  # (PDFs, DOCX, etc.) before chunking + embedding.
+  minio:
+    image: minio/minio:latest
+    container_name: dayjoy-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: dayjoy
+      MINIO_ROOT_PASSWORD: dayjoy123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------- Automation (n8n) ----------
+  # Workflow automation for lead capture, ticket routing, email digests, etc.
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: dayjoy-n8n
+    restart: unless-stopped
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      NODE_ENV: development
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-dayjoy-n8n-dev-key}
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---------- Vector DB (Qdrant) ----------
+  # Semantic search backend for the RAG knowledge base.
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: dayjoy-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------- Monitoring ----------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: dayjoy-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alert-rules.yaml:/etc/prometheus/alert-rules.yaml:ro
+      - prometheus_data:/prometheus
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: dayjoy-grafana
+    restart: unless-stopped
+    ports:
+      - "3030:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./monitoring/grafana:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+  loki:
+    image: grafana/loki:latest
+    container_name: dayjoy-loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    command: -config.file=/etc/loki/loki-config.yml
+
+  # ---------- Reverse Proxy ----------
+  nginx:
+    image: nginx:alpine
+    container_name: dayjoy-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deployment/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      admin-dashboard:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+  minio_data:
+  n8n_data:
+  qdrant_data:

@@ -1,0 +1,44 @@
+# =============================================================================
+# Dayjoy n8n — PersistentVolumeClaim
+# EBS-backed storage for n8n_data (credentials, workflow JSON cache).
+# =============================================================================
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: n8n-data
+  namespace: dayjoy-n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/part-of: dayjoy-ai-enterprise
+spec:
+  accessModes:
+    - ReadWriteOnce  # n8n-main is a StatefulSet-style deployment; RWO is fine
+  storageClassName: gp3-encrypted  # EBS gp3 with KMS encryption
+  resources:
+    requests:
+      storage: 50Gi
+---
+# StorageClass — EBS gp3 with KMS encryption (ap-south-1)
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3-encrypted
+  namespace: dayjoy-n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/part-of: dayjoy-ai-enterprise
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+  encrypted: "true"
+  kmsKeyId: alias/dayjoy-n8n-ebs  # KMS key alias
+  fsType: ext4
+reclaimPolicy: Retain  # NEVER delete the volume on PVC deletion
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+mountOptions:
+  - noatime
+  - nodiratime

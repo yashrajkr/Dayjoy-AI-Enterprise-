@@ -1,0 +1,160 @@
+# Dayjoy AI Platform — Prometheus Alerting Rules
+# Deploy to: kubectl apply -f infra/monitoring/prometheus-rules.yaml
+
+groups:
+  # ===== Application Alerts =====
+  - name: dayjoyai-application
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          team: engineering
+        annotations:
+          summary: "High 5xx error rate ({{ $value | humanizePercentage }})"
+          description: "Error rate is above 5% for {{ $labels.path }} on {{ $labels.method }}"
+
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 2
+        for: 10m
+        labels:
+          severity: warning
+          team: engineering
+        annotations:
+          summary: "High p95 latency ({{ $value }}s)"
+          description: "p95 latency above 2s for {{ $labels.path }}"
+
+      - alert: PodCrashLooping
+        expr: rate(kube_pod_container_status_restarts_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          team: devops
+        annotations:
+          summary: "Pod {{ $labels.pod }} is crash looping"
+
+  # ===== Database Alerts =====
+  - name: dayjoyai-database
+    rules:
+      - alert: DatabaseConnectionsHigh
+        expr: pg_stat_activity_count > 150
+        for: 5m
+        labels:
+          severity: warning
+          team: devops
+        annotations:
+          summary: "Database connections > 150"
+
+      - alert: DatabaseCPUHigh
+        expr: avg(rate(rds_cpu_utilization[5m])) > 80
+        for: 10m
+        labels:
+          severity: warning
+          team: devops
+        annotations:
+          summary: "RDS CPU > 80% for 10 minutes"
+
+      - alert: DatabaseDiskSpaceLow
+        expr: rds_free_storage_space < 10 * 1024 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: critical
+          team: devops
+        annotations:
+          summary: "RDS free storage < 10GB"
+
+  # ===== Infrastructure Alerts =====
+  - name: dayjoyai-infrastructure
+    rules:
+      - alert: NodeNotReady
+        expr: kube_node_status_condition{condition="Ready",status!="true"} == 1
+        for: 5m
+        labels:
+          severity: critical
+          team: devops
+        annotations:
+          summary: "K8s node {{ $labels.node }} is not ready"
+
+      - alert: PodPending
+        expr: kube_pod_status_phase{phase="Pending"} == 1
+        for: 15m
+        labels:
+          severity: warning
+          team: devops
+        annotations:
+          summary: "Pod {{ $labels.pod }} has been Pending for 15 minutes"
+
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          team: devops
+        annotations:
+          summary: "Node {{ $labels.instance }} memory > 85%"
+
+  # ===== AI Platform Alerts =====
+  - name: dayjoyai-ai
+    rules:
+      - alert: CircuitBreakerOpen
+        expr: circuit_breaker_state == 1
+        for: 1m
+        labels:
+          severity: critical
+          team: engineering
+        annotations:
+          summary: "Circuit breaker {{ $labels.name }} is OPEN"
+
+      - alert: AIAgentLatencyHigh
+        expr: ai_agent_response_time_seconds_p95 > 3
+        for: 10m
+        labels:
+          severity: warning
+          team: engineering
+        annotations:
+          summary: "AI agent p95 latency > 3s"
+
+      - alert: RAGConfidenceLow
+        expr: avg(rag_confidence_score) < 0.55
+        for: 30m
+        labels:
+          severity: warning
+          team: engineering
+        annotations:
+          summary: "RAG average confidence below threshold (0.55)"
+
+  # ===== Business Alerts =====
+  - name: dayjoyai-business
+    rules:
+      - alert: HighEscalationRate
+        expr: |
+          rate(conversation_escalated_total[1h]) / rate(conversation_total[1h]) > 0.3
+        for: 30m
+        labels:
+          severity: warning
+          team: operations
+        annotations:
+          summary: "Escalation rate > 30% in the last hour"
+
+      - alert: LowCSAT
+        expr: avg(customer_satisfaction_score) < 3.5
+        for: 1h
+        labels:
+          severity: warning
+          team: operations
+        annotations:
+          summary: "Average CSAT below 3.5 for 1 hour"
+
+      - alert: WorkflowFailureSpike
+        expr: |
+          rate(workflow_executions_failed_total[15m]) > 5
+        for: 15m
+        labels:
+          severity: warning
+          team: engineering
+        annotations:
+          summary: "More than 5 workflow failures in 15 minutes"

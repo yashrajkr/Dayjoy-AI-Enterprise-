@@ -1,0 +1,76 @@
+# =============================================================================
+# Dayjoy n8n — Prometheus scrape config
+# Scrapes n8n-main /metrics, n8n-worker /metrics, pushgateway, postgres, redis.
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+  external_labels:
+    cluster: dayjoy-n8n
+    env: production
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+scrape_configs:
+  # n8n main instance (built-in /metrics endpoint)
+  - job_name: 'n8n-main'
+    metrics_path: /metrics
+    scheme: http
+    basic_auth:
+      username: admin@dayjoy.ai
+      password_file: /etc/prometheus/secrets/n8n_basic_auth_password
+    static_configs:
+      - targets: ['n8n-main:5678']
+        labels:
+          service: n8n
+          role: main
+
+  # n8n workers (queue mode)
+  - job_name: 'n8n-worker'
+    metrics_path: /metrics
+    scheme: http
+    basic_auth:
+      username: admin@dayjoy.ai
+      password_file: /etc/prometheus/secrets/n8n_basic_auth_password
+    static_configs:
+      - targets: ['n8n-worker:5678']
+        labels:
+          service: n8n
+          role: worker
+
+  # Pushgateway (workflows push gauges here)
+  - job_name: 'pushgateway'
+    honor_labels: true
+    static_configs:
+      - targets: ['prometheus-pushgateway:9091']
+        labels:
+          service: pushgateway
+
+  # PostgreSQL exporter
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+        labels:
+          service: postgres
+
+  # Redis exporter
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          service: redis
+
+  # Caddy (built-in admin API metrics)
+  - job_name: 'caddy'
+    static_configs:
+      - targets: ['caddy:2019']
+        labels:
+          service: caddy
