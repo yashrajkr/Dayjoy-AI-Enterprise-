@@ -2,7 +2,7 @@
 # Optimized: standalone output, small image, non-root user
 
 # ===== Stage 1: Dependencies =====
-FROM node:22-alpine AS deps
+FROM node:26-alpine AS deps
 
 RUN npm install -g pnpm
 
@@ -12,7 +12,7 @@ COPY package.json pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile || pnpm install
 
 # ===== Stage 2: Builder =====
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 
 RUN npm install -g pnpm
 
@@ -29,7 +29,7 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 RUN pnpm build
 
 # ===== Stage 3: Runtime =====
-FROM node:22-alpine AS runtime
+FROM node:26-alpine AS runtime
 
 # Install curl for health checks
 RUN apk add --no-cache curl
