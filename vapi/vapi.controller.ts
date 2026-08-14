@@ -349,7 +349,7 @@ export class VapiController {
       where: { id, tenantId: user.tenantId },
       include: {
         customer: true,
-        transcripts: { orderBy: { timestamp: 'asc' } },
+        transcripts: { orderBy: { createdAt: 'asc' } },
         analytics: true,
       },
     });

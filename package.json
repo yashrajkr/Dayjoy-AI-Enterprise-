@@ -41,11 +41,15 @@
     "@types/node": "^20.14.0",
     "concurrently": "^8.2.0",
     "prettier": "^3.3.0",
+    "prisma": "6.19.3",
     "typescript": "^5.4.0"
   },
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=9.0.0"
   },
-  "packageManager": "pnpm@9.15.0"
+  "packageManager": "pnpm@9.15.0",
+  "dependencies": {
+    "@prisma/client": "6.19.3"
+  }
 }

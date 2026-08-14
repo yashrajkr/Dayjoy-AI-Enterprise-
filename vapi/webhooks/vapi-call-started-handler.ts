@@ -120,6 +120,11 @@ export class VapiCallStartedHandler {
           tenantId,
           callId: normalized.id,
           phoneNumber: normalized.from ?? null,
+          // `direction` is NOT NULL at the database level — must be set on
+          // every create, not just stashed in `metadata`.
+          direction: normalized.direction ?? 'INBOUND',
+          assistantId: normalized.assistantId ?? null,
+          customerId: customerId ?? null,
           status: 'IN_PROGRESS',
           startedAt: normalized.startedAt
             ? new Date(normalized.startedAt)

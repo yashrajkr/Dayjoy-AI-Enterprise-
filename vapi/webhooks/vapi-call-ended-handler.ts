@@ -161,6 +161,7 @@ export class VapiCallEndedHandler {
     } else {
       await this.prisma.voiceAnalytics.create({
         data: {
+          tenantId: session.tenantId,
           sessionId: session.id,
           ...analyticsData,
         } as any,

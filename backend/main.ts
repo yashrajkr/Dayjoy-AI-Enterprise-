@@ -1,3 +1,10 @@
+// Must run before any other import: `VapiConfig`/`DEFAULT_VAPI_CONFIG` (and
+// similar env-eval-at-import-time config objects) read `process.env`
+// directly at module-eval time, which happens as soon as `./app.module` is
+// required below — before Nest's `ConfigModule.forRoot()` would otherwise
+// load `.env`. Loading dotenv here first guarantees `process.env` is
+// populated from `backend/.env` before any transitive import reads it.
+import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
