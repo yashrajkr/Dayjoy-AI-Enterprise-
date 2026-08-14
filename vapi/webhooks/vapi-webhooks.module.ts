@@ -4,10 +4,7 @@ import { VapiWebhookService } from './vapi-webhook-service';
 import { VapiCallStartedHandler } from './vapi-call-started-handler';
 import { VapiCallEndedHandler } from './vapi-call-ended-handler';
 import { VapiTranscriptHandler } from './vapi-transcript-handler';
-import {
-  VapiFunctionCallHandler,
-  VAPI_TOOL_REGISTRY,
-} from './vapi-function-call-handler';
+import { VapiFunctionCallHandler } from './vapi-function-call-handler';
 import { VapiMemoryModule } from '../memory/vapi-memory.module';
 import { VapiAnalyticsModule } from '../analytics/vapi-analytics.module';
 
@@ -41,7 +38,6 @@ import { VapiAnalyticsModule } from '../analytics/vapi-analytics.module';
     VapiCallEndedHandler,
     VapiTranscriptHandler,
     VapiFunctionCallHandler,
-    VAPI_TOOL_REGISTRY,
   ],
 })
 export class VapiWebhooksModule {}

@@ -175,10 +175,23 @@ export class VapiWebhookService {
   async process(body: any): Promise<VapiWebhookResult> {
     const type: VapiWebhookEventType = body?.type ?? 'unknown';
     const callId: string | undefined = body?.call?.id;
+    // Prefer an id Vapi supplied. When absent, derive a STABLE key from the
+    // payload's own content (call id + type + a content hash) rather than
+    // wall-clock time — `Date.now()` produces a different value on every
+    // retry of the exact same event, which silently defeats idempotency
+    // for event types that don't carry an `id`/`eventId`/`timestamp`
+    // (e.g. bare `status-update`/`hang` events).
+    const contentHash = crypto
+      .createHash('sha256')
+      .update(JSON.stringify(body ?? {}))
+      .digest('hex')
+      .slice(0, 16);
     const externalEventId: string =
       body?.id ??
       body?.eventId ??
-      (callId ? `${callId}-${type}-${body?.timestamp ?? Date.now()}` : `anon-${type}-${Date.now()}`);
+      (body?.timestamp
+        ? `${callId ?? 'anon'}-${type}-${body.timestamp}`
+        : `${callId ?? 'anon'}-${type}-${contentHash}`);
 
     // -----------------------------------------------------------
     // Idempotency — fast-path duplicate detection via Redis SETNX

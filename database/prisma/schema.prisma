@@ -1802,20 +1802,26 @@ model Integration {
 }
 
 model WebhookEvent {
-  id          String    @id @default(uuid())
-  tenant      Tenant?   @relation(fields: [tenantId], references: [id])
-  tenantId    String?   @map("tenant_id")
-  source      String // vapi, twilio, whatsapp, stripe
-  eventType   String    @map("event_type")
-  payload     Json
-  signature   String?
-  processed   Boolean   @default(false)
-  processedAt DateTime? @map("processed_at")
-  error       String?   @db.Text
-  createdAt   DateTime  @default(now()) @map("created_at")
+  id              String    @id @default(uuid())
+  tenant          Tenant?   @relation(fields: [tenantId], references: [id])
+  tenantId        String?   @map("tenant_id")
+  source          String // vapi, twilio, whatsapp, stripe
+  eventType       String    @map("event_type")
+  eventIdExternal String?   @map("event_id_external")
+  payload         Json
+  headers         Json?
+  signature       String?
+  rawBody         String?   @map("raw_body") @db.Text
+  processed       Boolean   @default(false)
+  processedAt     DateTime? @map("processed_at")
+  error           String?   @map("processing_error") @db.Text
+  retryCount      Int       @default(0) @map("retry_count")
+  receivedAt      DateTime  @default(now()) @map("received_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
 
-  @@index([source, eventType, createdAt])
-  @@index([processed, createdAt])
+  @@index([source, eventType, receivedAt])
+  @@index([processed, receivedAt])
+  @@index([source, eventIdExternal])
   @@map("webhook_events")
 }
 

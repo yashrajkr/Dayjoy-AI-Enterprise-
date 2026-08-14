@@ -39,7 +39,13 @@ export function createMockRedis() {
   return {
     store,
     get: vi.fn(async (key: string) => store.get(key) ?? null),
-    set: vi.fn(async (key: string, value: string) => {
+    // Mirrors ioredis's variadic SET signature, e.g.
+    // `set(key, value, 'EX', ttlSeconds, 'NX')`. Honors `NX` (only set if
+    // the key doesn't already exist, returning `null` instead of `'OK'`
+    // when it does) since callers rely on this for idempotency checks.
+    set: vi.fn(async (key: string, value: string, ...rest: unknown[]) => {
+      const nx = rest.some((arg) => typeof arg === 'string' && arg.toUpperCase() === 'NX');
+      if (nx && store.has(key)) return null;
       store.set(key, value);
       return 'OK';
     }),
