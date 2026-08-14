@@ -98,7 +98,7 @@ export class VapiCallLogger {
       });
     } else {
       await this.prisma.voiceAnalytics.create({
-        data: { sessionId, ...data } as any,
+        data: { tenantId: summary.tenantId, sessionId, ...data } as any,
       });
     }
   }

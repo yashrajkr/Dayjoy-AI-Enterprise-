@@ -223,7 +223,8 @@ model Tenant {
   ragQueries              RagQuery[]
   embeddings              Embedding[]
   voiceSessions           VoiceSession[]
-  voiceRecordings         VoiceRecording[]
+  voiceTranscripts        VoiceTranscript[]
+  voiceAnalytics          VoiceAnalytics[]
   whatsappContacts        WhatsappContact[]
   whatsappSessions        WhatsappSession[]
   whatsappMessages        WhatsappMessage[]
@@ -308,6 +309,7 @@ model User {
   accessLogs              AccessLog[]
   notifications           Notification[]
   webSessions             WebSession[]
+  voiceSessions           VoiceSession[]
   // Domain back-relations.
   notificationPreferences NotificationPreference[]
   inventoryTransactions   InventoryTransaction[]
@@ -425,6 +427,7 @@ model Customer {
   productReviews   ProductReview[]
   aiMemories       AiMemory[]
   conversations    Conversation[]
+  voiceSessions    VoiceSession[]
 
   @@index([tenantId, status])
   @@map("customers")
@@ -889,44 +892,53 @@ model Embedding {
 
 // 6. Channels Models
 
+// NOTE: Field set below mirrors the actual `voice_sessions` table created by
+// `database/migrations/*.sql` (the SQL migrations are authoritative for this
+// table — see worklog for the Prisma/SQL reconciliation pass). There is no
+// `voice_recordings` table in the applied migrations, so the old
+// `VoiceRecording` model (and this model's `recordings` back-relation) were
+// removed rather than left pointing at a non-existent table.
 model VoiceSession {
   id              String        @id @default(uuid())
-  tenant          Tenant        @relation(fields: [tenantId], references: [id])
+  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   tenantId        String        @map("tenant_id")
   conversation    Conversation? @relation(fields: [conversationId], references: [id])
   conversationId  String?       @map("conversation_id")
-  callId          String        @unique @map("call_id")
-  phoneNumber     String?       @map("phone_number")
-  status          String        @default("active")
-  durationSeconds Int?          @map("duration_seconds")
-  recordingUrl    String?       @map("recording_url")
-  metadata        Json?
+  customer        Customer?     @relation(fields: [customerId], references: [id])
+  customerId      String?       @map("customer_id")
+  user            User?         @relation(fields: [userId], references: [id])
+  userId          String?       @map("user_id")
+  // Vapi's call id. Mapped to the `vapi_call_id` column; kept as `callId` in
+  // the Prisma field name since that's what the webhook handlers / REST
+  // controller already reference.
+  callId          String?       @unique @map("vapi_call_id")
+  direction       String
+  // `phoneNumber` maps to `from_number` (the caller's number for the
+  // primary inbound-call flow). `toNumber` exposes the DB's `to_number`
+  // column separately for callers that need both sides of the call.
+  phoneNumber     String?       @map("from_number")
+  toNumber        String?       @map("to_number")
+  assistantId     String?       @map("assistant_id_vapi")
+  status          String        @default("INITIATED")
+  outcome         String?
+  intentDetected  String?       @map("intent_detected")
   startedAt       DateTime      @default(now()) @map("started_at")
+  answeredAt      DateTime?     @map("answered_at")
   endedAt         DateTime?     @map("ended_at")
+  durationSeconds Int?          @map("duration_seconds")
+  silenceSeconds  Int           @default(0) @map("silence_seconds")
+  talkTimeSeconds Int           @default(0) @map("talk_time_seconds")
+  recordingUrl    String?       @map("recording_url")
+  transcriptUrl   String?       @map("transcript_url")
+  costUsd         Float?        @map("cost_usd")
+  metadata        Json?
   createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
 
-  recordings  VoiceRecording[]
   transcripts VoiceTranscript[]
   analytics   VoiceAnalytics?
 
   @@map("voice_sessions")
-}
-
-model VoiceRecording {
-  id              String       @id @default(uuid())
-  tenant          Tenant       @relation(fields: [tenantId], references: [id])
-  tenantId        String       @map("tenant_id")
-  session         VoiceSession @relation(fields: [sessionId], references: [id])
-  sessionId       String       @map("session_id")
-  recordingUrl    String       @map("recording_url")
-  durationSeconds Int?         @map("duration_seconds")
-  fileSizeBytes   Int?         @map("file_size_bytes")
-  format          String?
-  transcription   String?
-  metadata        Json?
-  createdAt       DateTime     @default(now()) @map("created_at")
-
-  @@map("voice_recordings")
 }
 
 model WhatsappContact {
@@ -1499,15 +1511,19 @@ enum TranscriptRole {
 }
 
 model VoiceTranscript {
-  id         String         @id @default(uuid())
-  session    VoiceSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId  String         @map("session_id")
-  role       TranscriptRole
-  content    String         @db.Text
-  tokensUsed Int?           @map("tokens_used")
-  confidence Float?
-  metadata   Json?
-  createdAt  DateTime       @default(now()) @map("created_at")
+  id          String         @id @default(uuid())
+  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId    String         @map("tenant_id")
+  session     VoiceSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId   String         @map("session_id")
+  role        String
+  content     String         @db.Text
+  confidence  Float?
+  startTimeMs Int?           @map("start_time_ms")
+  endTimeMs   Int?           @map("end_time_ms")
+  tokensUsed  Int?           @map("tokens_used")
+  metadata    Json?
+  createdAt   DateTime       @default(now()) @map("created_at")
 
   @@index([sessionId, createdAt])
   @@map("voice_transcripts")
@@ -1515,6 +1531,8 @@ model VoiceTranscript {
 
 model VoiceAnalytics {
   id                    String            @id @default(uuid())
+  tenant                Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId              String            @map("tenant_id")
   session               VoiceSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   sessionId             String            @unique @map("session_id")
   durationSeconds       Int               @map("duration_seconds")
@@ -1526,7 +1544,7 @@ model VoiceAnalytics {
   customerSatisfaction  Float?            @map("customer_satisfaction") // 1-5 CSAT
   sentimentScore        Float?            @map("sentiment_score") // -1 to 1
   intentDetected        String?           @map("intent_detected")
-  outcome               VoiceCallOutcome?
+  outcome               String?
   costUsd               Float?            @map("cost_usd")
   metadata              Json?
   createdAt             DateTime          @default(now()) @map("created_at")

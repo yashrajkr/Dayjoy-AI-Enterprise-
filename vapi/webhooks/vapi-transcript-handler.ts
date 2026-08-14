@@ -100,6 +100,7 @@ export class VapiTranscriptHandler {
     // -------------------------------------------------------------
     const transcript = await this.prisma.voiceTranscript.create({
       data: {
+        tenantId: session.tenantId,
         sessionId: session.id,
         role,
         content,

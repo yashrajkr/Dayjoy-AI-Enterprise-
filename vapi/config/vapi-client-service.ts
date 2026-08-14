@@ -109,8 +109,8 @@ export class VapiClientService implements OnModuleInit {
 
     try {
       this.client = new VapiClient({
-        apiKey: this.config.apiKey,
-        baseURL: this.config.apiBaseUrl,
+        token: this.config.apiKey,
+        baseUrl: this.config.apiBaseUrl,
       });
       this.enabled = true;
       this.logger.log('Vapi client initialised.');
@@ -175,7 +175,7 @@ export class VapiClientService implements OnModuleInit {
 
   async getAssistant(id: string): Promise<VapiAssistant> {
     return this.withRetry('getAssistant', async () => {
-      const res = await this.client!.assistants.get(id);
+      const res = await this.client!.assistants.get({ id });
       return res as unknown as VapiAssistant;
     });
   }
@@ -185,14 +185,14 @@ export class VapiClientService implements OnModuleInit {
     payload: Partial<VapiAssistantPayload>,
   ): Promise<VapiAssistant> {
     return this.withRetry('updateAssistant', async () => {
-      const res = await this.client!.assistants.update(id, payload as any);
+      const res = await this.client!.assistants.update({ id, ...payload } as any);
       return res as unknown as VapiAssistant;
     });
   }
 
   async deleteAssistant(id: string): Promise<{ id: string; deleted: boolean }> {
     return this.withRetry('deleteAssistant', async () => {
-      await this.client!.assistants.delete(id);
+      await this.client!.assistants.delete({ id });
       return { id, deleted: true };
     });
   }
@@ -240,16 +240,24 @@ export class VapiClientService implements OnModuleInit {
 
   async getCall(callId: string): Promise<VapiCall> {
     return this.withRetry('getCall', async () => {
-      const res: any = await this.client!.calls.get(callId);
+      const res: any = await this.client!.calls.get({ id: callId });
       return this.normaliseCall(res);
     });
   }
 
+  /**
+   * The installed `@vapi-ai/server-sdk` REST client has no hangup/end
+   * endpoint (only list/create/get/update/delete on `calls`) — ending a
+   * live call requires the real-time call-control channel, which is out
+   * of scope here. Kept as an explicit, typed failure rather than
+   * silently no-op'ing or misusing `delete` (which removes call records,
+   * not live calls).
+   */
   async endCall(callId: string): Promise<void> {
-    return this.withRetry('endCall', async () => {
-      await this.client!.calls.end(callId);
-      this.logger.log(`Ended Vapi call ${callId}`);
-    });
+    throw new Error(
+      `endCall(${callId}) is not supported by @vapi-ai/server-sdk's REST client — ` +
+        'ending a live call requires Vapi call-control (out of scope for this integration).',
+    );
   }
 
   async listCalls(limit = 100): Promise<VapiCall[]> {
