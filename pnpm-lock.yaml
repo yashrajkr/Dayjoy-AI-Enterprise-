@@ -290,8 +290,8 @@ importers:
         specifier: ^7.53.0
         version: 7.85.0(react@19.2.8)
       react-markdown:
-        specifier: ^9.0.1
-        version: 9.1.0(@types/react@19.2.18)(react@19.2.8)
+        specifier: ^10.1.0
+        version: 10.1.0(@types/react@19.2.18)(react@19.2.8)
       remark-gfm:
         specifier: ^4.0.0
         version: 4.0.1
@@ -3633,6 +3633,7 @@ packages:
   '@xmldom/xmldom@0.8.13':
     resolution: {integrity: sha512-KRYzxepc14G/CEpEGc3Yn+JKaAeT63smlDr+vjB8jRfgTBBI9wRj/nkQEO+ucV8p8I9bfKLWp37uHgFrbntPvw==}
     engines: {node: '>=10.0.0'}
+    deprecated: this version has critical issues, please update to the latest version
 
   '@xtuc/ieee754@1.2.0':
     resolution: {integrity: sha512-DX8nKgqcGwsc0eJSqYt5lwP4DH5FlHnmuWWBRy7X0NcaGR0ZtuyeESgMwTYVEtxmsNGY+qit4QYT/MIYTOTPeA==}
@@ -6544,8 +6545,8 @@ packages:
   react-is@18.3.1:
     resolution: {integrity: sha512-/LLMVyas0ljjAtoYiPqYiL8VWXzUUdThrmU5+n20DZv+a+ClRoevUzw5JxU+Ieh5/c87ytoTBV9G1FiKfNJdmg==}
 
-  react-markdown@9.1.0:
-    resolution: {integrity: sha512-xaijuJB0kzGiUdG7nc2MOMDUDBWPyGAjZtUrow9XxUeua8IqeP+VlIfAZ3bphpcLTnSZXz6z9jcVC/TCwbfgdw==}
+  react-markdown@10.1.0:
+    resolution: {integrity: sha512-qKxVopLT/TyA6BX3Ue5NwabOsAzm0Q7kAPwq6L+wWDwisYs7R8vZ0nRXqq6rkueboxpkjvLGU9fWifiX/ZZFxQ==}
     peerDependencies:
       '@types/react': '>=18'
       react: '>=18'
@@ -13621,7 +13622,7 @@ snapshots:
 
   react-is@18.3.1: {}
 
-  react-markdown@9.1.0(@types/react@19.2.18)(react@19.2.8):
+  react-markdown@10.1.0(@types/react@19.2.18)(react@19.2.8):
     dependencies:
       '@types/hast': 3.0.5
       '@types/mdast': 4.0.4
