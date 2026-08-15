@@ -608,6 +608,9 @@ export class KnowledgeService {
   ) {
     if (!process.env.GEMINI_API_KEY) return;
 
+    // Persist each embedding via raw SQL `UPDATE rag_chunks SET
+    // embedding = $1::vector WHERE id = $2`. We need the chunk IDs —
+    // fetch them by documentId + chunkIndex.
     const created = await this.prisma.ragChunk.findMany({
       where: { documentId },
       select: { id: true, chunkIndex: true },

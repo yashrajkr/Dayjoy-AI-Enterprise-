@@ -79,7 +79,7 @@ describe('ToolsService', () => {
   });
 
   describe('listTools', () => {
-    it('returns the 8 registered tools', async () => {
+    it('returns the 9 registered tools', async () => {
       const tools = await service.listTools();
       const names = tools.map((t) => t.name);
       expect(names).toEqual(
@@ -92,9 +92,10 @@ describe('ToolsService', () => {
           'book_appointment',
           'create_support_ticket',
           'human_transfer',
+          'order_lookup',
         ]),
       );
-      expect(tools).toHaveLength(8);
+      expect(tools).toHaveLength(9);
     });
   });
 
