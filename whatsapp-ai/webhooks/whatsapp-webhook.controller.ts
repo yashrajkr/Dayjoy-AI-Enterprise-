@@ -11,6 +11,7 @@ import {
   Body,
   Header,
   Logger,
+  RawBodyRequest,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { Public } from '../../backend/_shared/auth/public.decorator';
@@ -92,7 +93,7 @@ export class WhatsAppWebhookController {
   @HttpCode(HttpStatus.OK)
   @Header('Content-Type', 'application/json')
   async handleWebhook(
-    @Req() req: Request,
+    @Req() req: RawBodyRequest<Request>,
     @Body() body: any,
     @Headers('x-hub-signature-256') signature: string,
   ): Promise<{ status: string; processed?: number }> {

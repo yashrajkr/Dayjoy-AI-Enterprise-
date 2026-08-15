@@ -11,10 +11,24 @@ import { CsvLoader } from './csv.loader';
 import { HtmlLoader } from './html.loader';
 
 /**
+ * Names of the (private, constructor-injected) loader properties on
+ * {@link DocumentLoaderFactory}. `keyof DocumentLoaderFactory` can't be used
+ * here — from outside the class, `keyof` only sees its public members
+ * (`getLoader`, ...), not the private loader fields.
+ */
+type LoaderKey =
+  | 'pdfLoader'
+  | 'docxLoader'
+  | 'markdownLoader'
+  | 'textLoader'
+  | 'csvLoader'
+  | 'htmlLoader';
+
+/**
  * MIME type → loader map. Centralised so the factory + the
  * extension-based lookup share one source of truth.
  */
-const MIME_TO_LOADER: Record<string, keyof DocumentLoaderFactory> = {
+const MIME_TO_LOADER: Record<string, LoaderKey> = {
   'application/pdf': 'pdfLoader',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docxLoader',
   'text/markdown': 'markdownLoader',

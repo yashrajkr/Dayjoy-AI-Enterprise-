@@ -16,7 +16,7 @@ FROM base AS builder
 WORKDIR /app
 
 # Copy workspace root files
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
 
 # Copy all source directories (backend imports rag/, vapi/, and whatsapp-ai/
 # as sibling modules via ../rag, ../vapi, ../whatsapp-ai — see backend/tsconfig.json paths)
@@ -59,9 +59,6 @@ COPY --from=builder --chown=dayjoy:dayjoy /app/packages ./packages
 COPY --from=builder --chown=dayjoy:dayjoy /app/shared ./shared
 COPY --from=builder --chown=dayjoy:dayjoy /app/database ./database
 
-# Symlink node_modules so compiled code can find them
-RUN ln -s /app/node_modules /app/backend/dist/node_modules || true
-
 # Switch to non-root user
 USER dayjoy
 
@@ -78,5 +75,7 @@ EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=10s --start-period=60s --retries=5 \
   CMD curl -f http://localhost:3000/health || exit 1
 
-# Start backend - rootDir is "./" so output goes to dist/main.js
-CMD ["node", "backend/dist/main.js"]
+# Start backend - tsconfig rootDir is the repo root (".."), so tsc mirrors
+# the repo layout under dist/: backend/dist/backend/main.js, plus the
+# compiled rag/vapi/whatsapp-ai sibling sources it pulled in.
+CMD ["node", "backend/dist/backend/main.js"]

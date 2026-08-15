@@ -38,7 +38,13 @@
  *   metadata) so citations carry a `section` breadcrumb.
  */
 
-export interface ChunkingConfig {
+/**
+ * Shape shared by the top-level defaults and each per-document-type
+ * override. Deliberately excludes `byDocumentType` itself — a
+ * self-referential `ChunkingConfig` here would require every override to
+ * carry its own (infinitely recursive) set of overrides.
+ */
+export interface BaseChunkingConfig {
   // Token-based chunking
   chunkSize: number; // Target tokens per chunk
   chunkOverlap: number; // Overlap tokens between adjacent chunks
@@ -51,15 +57,17 @@ export interface ChunkingConfig {
   splitByParagraph: boolean; // Break at \n\n when possible
   splitBySentence: boolean; // When forced to split mid-paragraph, break at sentence boundaries
   preserveHeadings: boolean; // Use the loader's section structure for hierarchical chunking
+}
 
+export interface ChunkingConfig extends BaseChunkingConfig {
   // Document type specific overrides (same shape, indexed by document type).
   byDocumentType: {
-    pdf: ChunkingConfig;
-    docx: ChunkingConfig;
-    html: ChunkingConfig;
-    markdown: ChunkingConfig;
-    text: ChunkingConfig;
-    csv: ChunkingConfig;
+    pdf: BaseChunkingConfig;
+    docx: BaseChunkingConfig;
+    html: BaseChunkingConfig;
+    markdown: BaseChunkingConfig;
+    text: BaseChunkingConfig;
+    csv: BaseChunkingConfig;
   };
 }
 

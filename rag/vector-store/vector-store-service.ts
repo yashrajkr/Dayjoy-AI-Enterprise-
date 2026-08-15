@@ -96,7 +96,8 @@ export class VectorStoreService {
             documentId,
             chunkIndex: chunk.position,
             content: chunk.content,
-            tokenCount: chunk.tokenCount,
+            // tokenCount has no column on rag_chunks — it's carried in the
+            // `metadata` JSON blob instead (see buildChunkMetadata).
             metadata: metadata as any,
           },
         });
@@ -107,7 +108,7 @@ export class VectorStoreService {
           data: {
             tenantId,
             chunkId: created.id,
-            model: this.config.model || process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
+            model: process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
             dimensions: embedding.length,
           },
         });
@@ -165,7 +166,7 @@ export class VectorStoreService {
         c.document_id     AS document_id,
         c.chunk_index     AS chunk_index,
         c.content         AS content,
-        c.token_count     AS token_count,
+        (c.metadata->>'tokenCount')::int AS token_count,
         c.metadata        AS metadata,
         d.id              AS source_id,
         d.title           AS document_title,
@@ -216,7 +217,7 @@ export class VectorStoreService {
           c.document_id,
           c.chunk_index,
           c.content,
-          c.token_count,
+          (c.metadata->>'tokenCount')::int AS token_count,
           c.metadata,
           d.title AS document_title,
           d.metadata AS document_metadata,
@@ -274,7 +275,7 @@ export class VectorStoreService {
     const useHybrid =
       query.enableHybridSearch ?? this.config.hybridSearch.enabled;
     const options: SearchOptions = {
-      tenantId: query.filters?.tenantId ?? '',
+      tenantId: query.tenantId,
       topK: query.topK,
       filter: query.filters ?? {},
       threshold: query.similarityThreshold,
@@ -457,10 +458,14 @@ export class VectorStoreService {
       clauses.push(`${chunkAlias}.metadata->>'hasList' = '${filter.hasList}'`);
     }
     if (filter.minTokenCount !== undefined) {
-      clauses.push(`${chunkAlias}.token_count >= ${filter.minTokenCount}`);
+      clauses.push(
+        `(${chunkAlias}.metadata->>'tokenCount')::int >= ${filter.minTokenCount}`,
+      );
     }
     if (filter.maxTokenCount !== undefined) {
-      clauses.push(`${chunkAlias}.token_count <= ${filter.maxTokenCount}`);
+      clauses.push(
+        `(${chunkAlias}.metadata->>'tokenCount')::int <= ${filter.maxTokenCount}`,
+      );
     }
     return clauses.length > 0 ? `AND ${clauses.join(' AND ')}` : '';
   }

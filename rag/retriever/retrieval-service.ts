@@ -134,12 +134,14 @@ export class RetrievalService {
         .slice(0, this.config.finalTopK);
 
       // Apply document-level access control (defence in depth).
-      if (this.documentPermissionsService && (query as Record<string, unknown>).userRole) {
+      if (this.documentPermissionsService && query.userId) {
         try {
-          filtered = this.documentPermissionsService.filterAccessibleChunks(
-            filtered,
-            (query as Record<string, unknown>).userRole as string,
+          const accessibleIds = await this.documentPermissionsService.filterAccessibleChunks(
+            query.userId,
+            filtered.map((r) => r.chunkId),
           );
+          const accessibleIdSet = new Set(accessibleIds);
+          filtered = filtered.filter((r) => accessibleIdSet.has(r.chunkId));
         } catch (err) {
           this.logger.warn(`Document permissions filter failed: ${err instanceof Error ? err.message : 'unknown'}`);
         }
@@ -256,9 +258,7 @@ export class RetrievalService {
       {
         tenantId: query.tenantId,
         topK,
-        // SearchFilters requires `tenantId`; RetrievalFilters doesn't carry
-        // it (it's on the query itself), so we inject it here.
-        filter: { tenantId: query.tenantId, ...(query.filters ?? {}) },
+        filter: query.filters,
         threshold:
           query.similarityThreshold ?? this.config.similarityThreshold,
       },

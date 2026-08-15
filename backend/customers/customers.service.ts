@@ -230,7 +230,7 @@ export class CustomersService {
     // through a "set password" flow later).
     let userId: string | undefined;
     if (dto.email) {
-      const existingUser = await this.prisma.user.findUnique({
+      const existingUser = await this.prisma.user.findFirst({
         where: { email: dto.email },
       });
       if (existingUser && existingUser.tenantId === currentUser.tenantId) {

@@ -208,28 +208,32 @@ export class SearchService {
     );
 
     // 7. Build citations for the API response.
-    const citations = context.retrievedChunks.map((c, i) => ({
-      index: i + 1,
-      chunkId: c.chunkId,
-      documentId: c.documentId,
-      documentTitle: c.metadata.documentTitle,
-      snippet:
-        c.content.length > 200 ? c.content.slice(0, 200) + '...' : c.content,
-      score: c.finalScore,
-      unresolved: false,
-    })).filter((c) =>
-      // Only include citations that the LLM actually referenced.
-      processed.citations.some((pc) => pc.number === c.index && !pc.unresolved),
-    ).concat(
-      // Append unresolved citations (LLM cited a number we couldn't match).
-      processed.citations
-        .filter((pc) => pc.unresolved)
-        .map((pc) => ({
-          index: pc.number,
-          score: 0,
-          unresolved: true,
-        })),
-    );
+    const resolvedCitations: SearchResult['citations'] = context.retrievedChunks
+      .map((c, i) => ({
+        index: i + 1,
+        chunkId: c.chunkId,
+        documentId: c.documentId,
+        documentTitle: c.metadata.documentTitle,
+        snippet:
+          c.content.length > 200 ? c.content.slice(0, 200) + '...' : c.content,
+        score: c.finalScore,
+        unresolved: false,
+      }))
+      .filter((c) =>
+        // Only include citations that the LLM actually referenced.
+        processed.citations.some((pc) => pc.number === c.index && !pc.unresolved),
+      );
+
+    // Append unresolved citations (LLM cited a number we couldn't match).
+    const unresolvedCitations: SearchResult['citations'] = processed.citations
+      .filter((pc) => pc.unresolved)
+      .map((pc) => ({
+        index: pc.number,
+        score: 0,
+        unresolved: true,
+      }));
+
+    const citations: SearchResult['citations'] = resolvedCitations.concat(unresolvedCitations);
 
     // 8. Persist the query.
     const latencyMs = Date.now() - startTime;

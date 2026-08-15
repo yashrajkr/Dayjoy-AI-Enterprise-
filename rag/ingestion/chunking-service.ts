@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import {
   DEFAULT_CHUNKING_CONFIG,
   ChunkingConfig,
+  BaseChunkingConfig,
   ChunkMetadata,
 } from './chunking-config';
 import {
@@ -182,7 +183,7 @@ export class ChunkingService {
    * `config.maxChunkSize` (to avoid creating a chunk that violates the
    * hard ceiling).
    */
-  mergeSmallChunks(chunks: Chunk[], minSize: number, config: ChunkingConfig): Chunk[] {
+  mergeSmallChunks(chunks: Chunk[], minSize: number, config: BaseChunkingConfig): Chunk[] {
     if (chunks.length === 0) return [];
     const result: Chunk[] = [{ ...chunks[0] }];
 
@@ -261,7 +262,7 @@ export class ChunkingService {
   // Strategy implementations
   // ===================================================================
 
-  private pickStrategy(doc: LoadedDocument, config: ChunkingConfig): string {
+  private pickStrategy(doc: LoadedDocument, config: BaseChunkingConfig): string {
     if (config.preserveHeadings && doc.sections.length > 0) return 'hierarchical';
     if (config.splitByParagraph) return 'paragraph';
     return 'sentence';
@@ -272,7 +273,7 @@ export class ChunkingService {
    * Sections larger than `maxChunkSize` are sub-split at sentence
    * boundaries (each sub-chunk inherits the section heading).
    */
-  private chunkBySections(doc: LoadedDocument, config: ChunkingConfig): Chunk[] {
+  private chunkBySections(doc: LoadedDocument, config: BaseChunkingConfig): Chunk[] {
     const chunks: Chunk[] = [];
     let position = 0;
 
@@ -296,7 +297,7 @@ export class ChunkingService {
    * until `chunkSize` is reached. Falls back to sentence-splitting
    * for paragraphs larger than `chunkSize`.
    */
-  private chunkByParagraphs(doc: LoadedDocument, config: ChunkingConfig): Chunk[] {
+  private chunkByParagraphs(doc: LoadedDocument, config: BaseChunkingConfig): Chunk[] {
     const chunks: Chunk[] = [];
     const paragraphs = doc.text.split(/\n\s*\n+/).filter((p) => p.trim());
 
@@ -344,7 +345,7 @@ export class ChunkingService {
    * (single long block of text). Splits at sentence boundaries with
    * overlap.
    */
-  private chunkBySentences(doc: LoadedDocument, config: ChunkingConfig): Chunk[] {
+  private chunkBySentences(doc: LoadedDocument, config: BaseChunkingConfig): Chunk[] {
     const pieces = this.chunkByTokens(doc.text, config.chunkSize, config.chunkOverlap);
     return pieces.map((content, i) => this.makeChunk(undefined, content, i, doc));
   }
@@ -468,7 +469,7 @@ export class ChunkingService {
   private getConfigForDocumentType(
     mimeType: string,
     base: ChunkingConfig,
-  ): ChunkingConfig {
+  ): BaseChunkingConfig {
     const type = this.documentTypeFromMime(mimeType);
     return base.byDocumentType[type as keyof typeof base.byDocumentType] ?? base;
   }

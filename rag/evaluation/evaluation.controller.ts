@@ -41,6 +41,25 @@ import { EvaluationService, EvaluationSuite } from './evaluation-service';
  *
  * Reference: `docs/ai/13_AI_EVALUATION.md`, `docs/ai/16_AI_GOVERNANCE.md`.
  */
+
+/**
+ * Body for `POST /api/rag/evaluation/suites/:suiteId/run`.
+ *
+ * Declared above the controller: with `emitDecoratorMetadata` enabled,
+ * `@Body() body: RunSuiteBody` compiles to a runtime reference to the
+ * `RunSuiteBody` value (for `design:paramtypes`) evaluated at module load —
+ * classes aren't hoisted, so referencing it before this declaration ran
+ * threw a TDZ `ReferenceError` at container startup.
+ */
+export class RunSuiteBody {
+  /** Human-readable name shown in reports. Defaults to the URL `suiteId`. */
+  name?: string;
+  /** Optional description. */
+  description?: string;
+  /** Query IDs to evaluate. Required, non-empty. */
+  queryIds!: string[];
+}
+
 @Controller('api/rag/evaluation')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class EvaluationController {
@@ -171,16 +190,4 @@ export class EvaluationController {
     }
     return d;
   }
-}
-
-/**
- * Body for `POST /api/rag/evaluation/suites/:suiteId/run`.
- */
-export class RunSuiteBody {
-  /** Human-readable name shown in reports. Defaults to the URL `suiteId`. */
-  name?: string;
-  /** Optional description. */
-  description?: string;
-  /** Query IDs to evaluate. Required, non-empty. */
-  queryIds!: string[];
 }

@@ -362,7 +362,7 @@ export class AnalyticsService {
         where: {
           tenantId,
           eventType: 'tool_execution',
-          createdAt: { gte: since },
+          timestamp: { gte: since },
         },
       }),
     ]);

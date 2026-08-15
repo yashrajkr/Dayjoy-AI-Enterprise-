@@ -144,7 +144,7 @@ describe('AuthService', () => {
     };
 
     it('creates a user with a hashed password and returns tokens', async () => {
-      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.user.findFirst.mockResolvedValue(null);
       prisma.user.create.mockImplementation(async ({ data }: any) => ({
         id: 'user-1',
         email: data.email,
@@ -186,14 +186,14 @@ describe('AuthService', () => {
     });
 
     it('throws ConflictException when email already exists', async () => {
-      prisma.user.findUnique.mockResolvedValue({ id: 'existing' });
+      prisma.user.findFirst.mockResolvedValue({ id: 'existing' });
 
       await expect(service.register(dto)).rejects.toBeInstanceOf(ConflictException);
       expect(prisma.user.create).not.toHaveBeenCalled();
     });
 
     it('throws BadRequestException on weak password', async () => {
-      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.user.findFirst.mockResolvedValue(null);
 
       await expect(
         service.register({ ...dto, password: 'weak' }),
@@ -220,7 +220,7 @@ describe('AuthService', () => {
     });
 
     it('returns tokens on valid credentials', async () => {
-      prisma.user.findUnique.mockResolvedValue({
+      prisma.user.findFirst.mockResolvedValue({
         id: 'user-1',
         email: 'login@example.com',
         passwordHash,
@@ -248,7 +248,7 @@ describe('AuthService', () => {
     });
 
     it('throws UnauthorizedException on invalid email', async () => {
-      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.user.findFirst.mockResolvedValue(null);
 
       await expect(
         service.login('unknown@example.com', 'Password123!'),
@@ -256,7 +256,7 @@ describe('AuthService', () => {
     });
 
     it('throws UnauthorizedException on invalid password', async () => {
-      prisma.user.findUnique.mockResolvedValue({
+      prisma.user.findFirst.mockResolvedValue({
         id: 'user-1',
         email: 'login@example.com',
         passwordHash,
@@ -279,7 +279,7 @@ describe('AuthService', () => {
     });
 
     it('throws UnauthorizedException when the account is locked (Redis lockout key present)', async () => {
-      prisma.user.findUnique.mockResolvedValue({
+      prisma.user.findFirst.mockResolvedValue({
         id: 'user-1',
         email: 'locked@example.com',
         passwordHash,
@@ -299,7 +299,7 @@ describe('AuthService', () => {
     });
 
     it('throws UnauthorizedException when the account is not ACTIVE', async () => {
-      prisma.user.findUnique.mockResolvedValue({
+      prisma.user.findFirst.mockResolvedValue({
         id: 'user-1',
         email: 'inactive@example.com',
         passwordHash,
@@ -341,7 +341,7 @@ describe('AuthService', () => {
     });
 
     it('locks the account after 5 failed password attempts', async () => {
-      prisma.user.findUnique.mockResolvedValue({
+      prisma.user.findFirst.mockResolvedValue({
         id: 'user-1',
         email: 'lockme@example.com',
         passwordHash,
@@ -556,7 +556,7 @@ describe('AuthService', () => {
   // -------------------------------------------------------------------
   describe('requestPasswordReset', () => {
     it('issues a reset token when the user exists', async () => {
-      prisma.user.findUnique.mockResolvedValue({
+      prisma.user.findFirst.mockResolvedValue({
         id: 'user-1',
         email: 'reset@example.com',
         tenantId: 'tenant-1',
@@ -576,7 +576,7 @@ describe('AuthService', () => {
     });
 
     it('returns success without issuing a token when the user does not exist', async () => {
-      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.user.findFirst.mockResolvedValue(null);
 
       const result = await service.requestPasswordReset('nope@example.com');
 
@@ -585,7 +585,7 @@ describe('AuthService', () => {
     });
 
     it('invalidates existing unused tokens before issuing a new one', async () => {
-      prisma.user.findUnique.mockResolvedValue({
+      prisma.user.findFirst.mockResolvedValue({
         id: 'user-1',
         email: 'reset@example.com',
         tenantId: 'tenant-1',

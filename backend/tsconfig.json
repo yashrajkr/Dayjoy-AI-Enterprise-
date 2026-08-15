@@ -10,7 +10,7 @@
     "sourceMap": false,
     "noEmit": false,
     "outDir": "./dist",
-    "rootDir": "./",
+    "rootDir": "../",
     "baseUrl": "./",
     "incremental": false,
     "strict": false,
@@ -21,7 +21,6 @@
     "noImplicitReturns": false,
     "noFallthroughCasesInSwitch": false,
     "noImplicitAny": false,
-    "suppressImplicitAnyIndexErrors": true,
     "paths": {
       "@app/*": ["./*"],
       "@shared/*": ["./_shared/*"],
@@ -37,6 +36,7 @@
     "test",
     "_express-reference",
     "automation",
+    "_shared/testing/**/*.ts",
     "**/*.spec.ts",
     "**/*.test.ts",
     "**/*-tests.ts",
@@ -49,6 +49,10 @@
     "../vapi/**/*-tests.ts",
     "../whatsapp-ai/**/*.spec.ts",
     "../whatsapp-ai/**/*.test.ts",
-    "../whatsapp-ai/**/*-tests.ts"
+    "../whatsapp-ai/**/*-tests.ts",
+    "../rag/tests/**/*.ts",
+    "../vapi/tests/**/*.ts",
+    "../vapi/vitest.config.ts",
+    "../rag/embeddings/embeddings-pipeline.ts"
   ]
 }

@@ -167,7 +167,7 @@ describe('EmployeesService', () => {
   // -------------------------------------------------------------------
   describe('create', () => {
     it('creates a user + employee profile + links the role', async () => {
-      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.user.findFirst.mockResolvedValue(null);
       prisma.employee.findUnique.mockResolvedValue(null);
       prisma.user.create.mockImplementation(async ({ data }: any) => ({
         id: 'u1',
@@ -209,7 +209,7 @@ describe('EmployeesService', () => {
     });
 
     it('throws ConflictException when the email is already taken', async () => {
-      prisma.user.findUnique.mockResolvedValue({ id: 'existing' });
+      prisma.user.findFirst.mockResolvedValue({ id: 'existing' });
 
       const dto: CreateEmployeeDto = {
         email: 'taken@x.com',
@@ -222,7 +222,7 @@ describe('EmployeesService', () => {
     });
 
     it('throws ConflictException when the employeeCode is already taken', async () => {
-      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.user.findFirst.mockResolvedValue(null);
       prisma.employee.findUnique.mockResolvedValue({ id: 'existing' });
 
       const dto: CreateEmployeeDto = {

@@ -149,7 +149,6 @@ export class VapiCallLogger {
 
     const sessions = await this.prisma.voiceSession.findMany({
       where: sessionWhere,
-      include: { analytics: true },
       select: {
         id: true,
         durationSeconds: true,

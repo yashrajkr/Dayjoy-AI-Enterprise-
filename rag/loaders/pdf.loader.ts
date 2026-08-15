@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type pdfParse from 'pdf-parse';
+import type { PDFParse as PDFParseType } from 'pdf-parse';
 import {
   DocumentLoader,
   DocumentMetadata,
@@ -34,28 +34,41 @@ export class PdfLoader implements DocumentLoader {
     this.logger.debug(`Loading PDF "${metadata.filename}" (${buffer.length} bytes)`);
 
     // Lazy-import so the dependency is only loaded when actually needed
-    // (keeps startup fast for tenants that never ingest PDFs).
-    const { default: pdf } = await import('pdf-parse') as { default: typeof pdfParse };
-    const data = await pdf(buffer);
-
-    const text = (data.text ?? '').trim();
-    const sections = this.extractSections(text);
-    const wordCount = this.countWords(text);
-
-    return {
-      text,
-      metadata: {
-        ...metadata,
-        pageCount: data.numpages,
-        wordCount,
-        charCount: text.length,
-        title: data.info?.Title || undefined,
-        author: data.info?.Author || undefined,
-        createdAt: this.parsePdfDate(data.info?.CreationDate),
-        language: 'en',
-      },
-      sections,
+    // (keeps startup fast for tenants that never ingest PDFs). pdf-parse
+    // v2 replaced the old `pdf(buffer) => {text, ...}` function with a
+    // `PDFParse` class exposing separate `getText()`/`getInfo()` calls.
+    const { PDFParse } = (await import('pdf-parse')) as {
+      PDFParse: typeof PDFParseType;
     };
+    const parser = new PDFParse({ data: buffer });
+    try {
+      const [textResult, infoResult] = await Promise.all([
+        parser.getText(),
+        parser.getInfo(),
+      ]);
+
+      const text = (textResult.text ?? '').trim();
+      const sections = this.extractSections(text);
+      const wordCount = this.countWords(text);
+      const info = infoResult.info ?? {};
+
+      return {
+        text,
+        metadata: {
+          ...metadata,
+          pageCount: infoResult.total,
+          wordCount,
+          charCount: text.length,
+          title: info.Title || undefined,
+          author: info.Author || undefined,
+          createdAt: this.parsePdfDate(info.CreationDate),
+          language: 'en',
+        },
+        sections,
+      };
+    } finally {
+      await parser.destroy();
+    }
   }
 
   /**

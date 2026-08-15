@@ -21,6 +21,7 @@ import {
   BatchIngestionResult,
   IngestDocumentDto,
   IngestionResult,
+  RagSourceType,
 } from './ingestion.dto';
 
 /**
@@ -239,6 +240,7 @@ export class IngestionService {
       .filter((d) => d.content)
       .map((d) => ({
         sourceId,
+        sourceType: source.type as RagSourceType,
         title: d.title,
         content: d.content ?? '',
         mimeType: (d.metadata as any)?.mimeType ?? 'text/plain',
@@ -320,16 +322,22 @@ export class IngestionService {
       return existing;
     }
 
+    // RagSource has no (tenantId, name) unique constraint at the DB level
+    // (schema only enforces uniqueness on `id`), so this is a find-or-create
+    // rather than a true atomic upsert.
     const name = dto.sourceName ?? `Default source for "${dto.title}"`;
-    return this.prisma.ragSource.upsert({
-      where: { tenantId_name: { tenantId, name } },
-      create: {
+    const existingSource = await this.prisma.ragSource.findFirst({
+      where: { tenantId, name },
+    });
+    if (existingSource) return existingSource;
+
+    return this.prisma.ragSource.create({
+      data: {
         tenantId,
         name,
         type: dto.sourceType,
         status: 'active',
       },
-      update: {},
     });
   }
 
