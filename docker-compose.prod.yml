@@ -1,605 +1,194 @@
 # =====================================================
 # Dayjoy AI Enterprise — Production docker-compose
-# -----------------------------------------------------
-# Production-grade compose file with:
-#   - Resource limits on every service
-#   - Health checks for readiness/liveness probes
-#   - json-file logging driver with size + count limits
-#   - restart: unless-stopped on every service
-#   - Network isolation (frontend / backend / data tiers)
-#   - Named volumes with descriptive labels
-#
-# Usage:
-#   docker compose -f docker-compose.prod.yml --env-file .env up -d
-#   docker compose -f docker-compose.prod.yml ps
-#   docker compose -f docker-compose.prod.yml logs -f backend
-#   docker compose -f docker-compose.prod.yml down
-#
-# NOTE: This compose file is intended for single-host production
-# deployments (e.g. a beefy EC2 box or a self-managed VM). For
-# multi-AZ HA, deploy via the Helm chart under
-# deployment/kubernetes/helm/dayjoyai/ instead.
 # =====================================================
+# Production-grade configuration overrides
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Note: Override with production settings only.
+# Keep container_name in base compose — don't scale with replicas in Swarm/K8s.
+
 version: "3.9"
 
-# ---------- Network topology ----------
-# Three isolated networks enforce least-privilege east-west traffic:
-#   - dayjoy-data    : only DB + cache (no external exposure)
-#   - dayjoy-backend : app services that need DB + Redis
-#   - dayjoy-edge    : public-facing proxies (nginx)
-networks:
-  dayjoy-data:
-    name: dayjoy-data
-    labels:
-      dayjoy.ai/tier: "data"
-      dayjoy.ai/visibility: "internal"
-  dayjoy-backend:
-    name: dayjoy-backend
-    labels:
-      dayjoy.ai/tier: "backend"
-      dayjoy.ai/visibility: "internal"
-  dayjoy-edge:
-    name: dayjoy-edge
-    labels:
-      dayjoy.ai/tier: "edge"
-      dayjoy.ai/visibility: "public"
-
-# ---------- Named volumes (with labels for backup tooling) ----------
-volumes:
-  postgres_data:
-    name: dayjoy-postgres-data
-    labels:
-      dayjoy.ai/service: "postgres"
-      dayjoy.ai/backup: "nightly"
-  redis_data:
-    name: dayjoy-redis-data
-    labels:
-      dayjoy.ai/service: "redis"
-      dayjoy.ai/backup: "snapshot"
-  minio_data:
-    name: dayjoy-minio-data
-    labels:
-      dayjoy.ai/service: "minio"
-      dayjoy.ai/backup: "mirror-to-s3"
-  prometheus_data:
-    name: dayjoy-prometheus-data
-    labels:
-      dayjoy.ai/service: "prometheus"
-  grafana_data:
-    name: dayjoy-grafana-data
-    labels:
-      dayjoy.ai/service: "grafana"
-  loki_data:
-    name: dayjoy-loki-data
-    labels:
-      dayjoy.ai/service: "loki"
-  n8n_data:
-    name: dayjoy-n8n-data
-    labels:
-      dayjoy.ai/service: "n8n"
-  qdrant_data:
-    name: dayjoy-qdrant-data
-    labels:
-      dayjoy.ai/service: "qdrant"
-      dayjoy.ai/backup: "snapshot"
-
-# ---------- Default logging driver ----------
-x-logging: &default-logging
-  driver: "json-file"
-  options:
-    max-size: "50m"
-    max-file: "10"
-    labels: "service,environment"
-
-# ---------- Default restart policy ----------
-x-restart: &default-restart unless-stopped
-
 services:
-  # ============== DATA TIER ==============
   postgres:
-    image: pgvector/pgvector:pg16
-    container_name: dayjoy-postgres
-    restart: *default-restart
-    logging: *default-logging
-    labels:
-      dayjoy.ai/service: "postgres"
-      dayjoy.ai/tier: "data"
-      dayjoy.ai/environment: "production"
+    restart: always
     environment:
-      POSTGRES_USER: "${POSTGRES_USER:-dayjoy}"
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
-      POSTGRES_DB: "${POSTGRES_DB:-dayjoy_ai}"
-      # Tuned for production workloads
-      PGDATA: /var/lib/postgresql/data/pgdata
-    ports:
-      - "127.0.0.1:5432:5432"   # bind to localhost only; access via backend network
+      POSTGRES_INITDB_ARGS: "-c log_statement=all -c log_min_duration_statement=1000"
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '2'
+          memory: 2G
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./database/migrations:/docker-entrypoint-initdb.d:ro
-    networks:
-      - dayjoy-data
-    deploy:
-      resources:
-        limits:
-          cpus: "4.0"
-          memory: 8G
-        reservations:
-          cpus: "1.0"
-          memory: 2G
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dayjoy} -d ${POSTGRES_DB:-dayjoy_ai}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 60s
-    ulimits:
-      nofile:
-        soft: 65536
-        hard: 65536
+      - ./database/backups:/backups
 
   redis:
-    image: redis:7-alpine
-    container_name: dayjoy-redis
-    restart: *default-restart
-    logging: *default-logging
-    labels:
-      dayjoy.ai/service: "redis"
-      dayjoy.ai/tier: "data"
-      dayjoy.ai/environment: "production"
-    command: >
-      redis-server
-      --appendonly yes
-      --appendfsync everysec
-      --maxmemory 1gb
-      --maxmemory-policy allkeys-lru
-      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
-      --save 900 1
-      --save 300 10
-      --save 60 10000
-    ports:
-      - "127.0.0.1:6379:6379"
-    volumes:
-      - redis_data:/data
-    networks:
-      - dayjoy-data
+    restart: always
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD} --loglevel warning
     deploy:
       resources:
         limits:
-          cpus: "2.0"
+          cpus: '2'
           memory: 2G
         reservations:
-          cpus: "0.5"
-          memory: 512M
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
-  minio:
-    image: minio/minio:latest
-    container_name: dayjoy-minio
-    restart: *default-restart
-    logging: *default-logging
-    labels:
-      dayjoy.ai/service: "minio"
-      dayjoy.ai/tier: "data"
-      dayjoy.ai/environment: "production"
-    environment:
-      MINIO_ROOT_USER: "${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}"
-      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}"
-    command: server /data --console-address ":9001"
-    ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
-    volumes:
-      - minio_data:/data
-    networks:
-      - dayjoy-data
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
+          cpus: '1'
           memory: 1G
-        reservations:
-          cpus: "0.25"
-          memory: 256M
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
 
-  # ============== BACKEND TIER ==============
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    image: dayjoy/backend:${APP_VERSION:-1.0.0}
-    container_name: dayjoy-backend
-    restart: *default-restart
-    logging: *default-logging
-    labels:
-      dayjoy.ai/service: "backend"
-      dayjoy.ai/tier: "backend"
-      dayjoy.ai/environment: "production"
-    env_file: .env
+    restart: always
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-dayjoy}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-dayjoy_ai}
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
-      - S3_ENDPOINT=http://minio:9000
-    ports:
-      - "127.0.0.1:3000:3000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    networks:
-      - dayjoy-backend
-      - dayjoy-data
+      - LOG_LEVEL=warn
+      - NODE_OPTIONS=--max-old-space-size=2048
     deploy:
+      update_config:
+        parallelism: 1
+        delay: 10s
       resources:
         limits:
-          cpus: "2.0"
-          memory: 2G
+          cpus: '4'
+          memory: 4G
         reservations:
-          cpus: "0.5"
-          memory: 512M
+          cpus: '2'
+          memory: 2G
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
+      interval: 30s
+      timeout: 15s
+      retries: 3
       start_period: 90s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
 
   voice-ai:
-    build:
-      context: ./vapi
-      dockerfile: Dockerfile
-    image: dayjoy/voice-ai:${APP_VERSION:-1.0.0}
-    container_name: dayjoy-voice-ai
-    restart: *default-restart
-    logging: *default-logging
-    labels:
-      dayjoy.ai/service: "voice-ai"
-      dayjoy.ai/tier: "backend"
-      dayjoy.ai/environment: "production"
-    env_file: .env
+    restart: always
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-dayjoy}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-dayjoy_ai}
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
-    ports:
-      - "127.0.0.1:3001:3001"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
-    networks:
-      - dayjoy-backend
-      - dayjoy-data
+      - LOG_LEVEL=warn
+      - NODE_OPTIONS=--max-old-space-size=1024
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: 1G
-        reservations:
-          cpus: "0.25"
-          memory: 256M
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-
-  whatsapp-ai:
-    build:
-      context: ./whatsapp-ai
-      dockerfile: Dockerfile
-    image: dayjoy/whatsapp-ai:${APP_VERSION:-1.0.0}
-    container_name: dayjoy-whatsapp-ai
-    restart: *default-restart
-    logging: *default-logging
-    labels:
-      dayjoy.ai/service: "whatsapp-ai"
-      dayjoy.ai/tier: "backend"
-      dayjoy.ai/environment: "production"
-    env_file: .env
-    environment:
-      - NODE_ENV=production
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-dayjoy}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-dayjoy_ai}
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
-    ports:
-      - "127.0.0.1:3002:3002"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
-    networks:
-      - dayjoy-backend
-      - dayjoy-data
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 1G
-        reservations:
-          cpus: "0.25"
-          memory: 256M
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-
-  # ============== EDGE TIER ==============
-  admin-dashboard:
-    build:
-      context: ./apps/admin-dashboard
-      dockerfile: Dockerfile
-    image: dayjoy/admin-dashboard:${APP_VERSION:-1.0.0}
-    container_name: dayjoy-admin
-    restart: *default-restart
-    logging: *default-logging
-    labels:
-      dayjoy.ai/service: "admin-dashboard"
-      dayjoy.ai/tier: "edge"
-      dayjoy.ai/environment: "production"
-    env_file: .env
-    environment:
-      - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=${PUBLIC_API_URL:-https://api.dayjoy.ai}
-    ports:
-      - "127.0.0.1:3003:3000"
-    depends_on:
-      backend:
-        condition: service_healthy
-    networks:
-      - dayjoy-edge
-      - dayjoy-backend
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 1G
-        reservations:
-          cpus: "0.25"
-          memory: 256M
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  nginx:
-    image: nginx:1.27-alpine
-    container_name: dayjoy-nginx
-    restart: *default-restart
-    logging: *default-logging
-    labels:
-      dayjoy.ai/service: "nginx"
-      dayjoy.ai/tier: "edge"
-      dayjoy.ai/environment: "production"
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./deployment/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./deployment/nginx/certs:/etc/nginx/certs:ro
-    depends_on:
-      backend:
-        condition: service_healthy
-      admin-dashboard:
-        condition: service_healthy
-    networks:
-      - dayjoy-edge
-      - dayjoy-backend
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 512M
-        reservations:
-          cpus: "0.25"
-          memory: 128M
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-
-  # ============== AUTOMATION TIER ==============
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: dayjoy-n8n
-    restart: *default-restart
-    logging: *default-logging
-    labels:
-      dayjoy.ai/service: "n8n"
-      dayjoy.ai/tier: "automation"
-      dayjoy.ai/environment: "production"
-    environment:
-      - N8N_HOST=${N8N_HOST:-automation.dayjoy.ai}
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=https
-      - NODE_ENV=production
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=${N8N_USER:?N8N_USER required}
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD:?N8N_PASSWORD required}
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=postgres
-      - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-dayjoy_ai}
-      - DB_POSTGRESDB_USER=${POSTGRES_USER:-dayjoy}
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
-      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY required}
-    ports:
-      - "127.0.0.1:5678:5678"
-    volumes:
-      - n8n_data:/home/node/.n8n
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - dayjoy-backend
-      - dayjoy-data
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 1G
-        reservations:
-          cpus: "0.25"
-          memory: 256M
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5678/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # ============== OBSERVABILITY TIER ==============
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: dayjoy-prometheus
-    restart: *default-restart
-    logging: *default-logging
-    labels:
-      dayjoy.ai/service: "prometheus"
-      dayjoy.ai/tier: "observability"
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--storage.tsdb.retention.time=30d"
-      - "--web.enable-lifecycle"
-    ports:
-      - "127.0.0.1:9090:9090"
-    volumes:
-      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./monitoring/prometheus/alert-rules.yaml:/etc/prometheus/alert-rules.yaml:ro
-      - prometheus_data:/prometheus
-    networks:
-      - dayjoy-backend
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
+          cpus: '2'
           memory: 2G
         reservations:
-          cpus: "0.25"
+          cpus: '1'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+  admin-dashboard:
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_ENABLE_DEBUG=false
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '1'
           memory: 512M
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/ready"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+  minio:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+  n8n:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+  qdrant:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '2'
+          memory: 2G
+
+  prometheus:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '1'
+          memory: 512M
 
   grafana:
-    image: grafana/grafana:latest
-    container_name: dayjoy-grafana
-    restart: *default-restart
-    logging: *default-logging
-    labels:
-      dayjoy.ai/service: "grafana"
-      dayjoy.ai/tier: "observability"
+    restart: always
     environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD required}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
       - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_SERVER_ROOT_URL=https://grafana.dayjoy.ai
-    ports:
-      - "127.0.0.1:3030:3000"
-    volumes:
-      - ./monitoring/grafana:/etc/grafana/provisioning:ro
-      - grafana_data:/var/lib/grafana
-    depends_on:
-      prometheus:
-        condition: service_healthy
-    networks:
-      - dayjoy-backend
+      - GF_LOG_LEVEL=warn
     deploy:
       resources:
         limits:
-          cpus: "0.5"
+          cpus: '1'
           memory: 512M
         reservations:
-          cpus: "0.1"
-          memory: 128M
-
-  # ============== VECTOR DB TIER ==============
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: dayjoy-qdrant
-    restart: *default-restart
-    logging: *default-logging
-    labels:
-      dayjoy.ai/service: "qdrant"
-      dayjoy.ai/tier: "data"
-      dayjoy.ai/environment: "production"
-    ports:
-      - "127.0.0.1:6333:6333"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    networks:
-      - dayjoy-data
-      - dayjoy-backend
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 2G
-        reservations:
-          cpus: "0.25"
-          memory: 512M
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+          cpus: '0.5'
+          memory: 256M
 
   loki:
-    image: grafana/loki:latest
-    container_name: dayjoy-loki
-    restart: *default-restart
-    logging: *default-logging
-    labels:
-      dayjoy.ai/service: "loki"
-      dayjoy.ai/tier: "observability"
-    command: -config.file=/etc/loki/loki-config.yml
-    ports:
-      - "127.0.0.1:3100:3100"
-    volumes:
-      - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
-      - loki_data:/loki
-    networks:
-      - dayjoy-backend
+    restart: always
     deploy:
       resources:
         limits:
-          cpus: "0.5"
+          cpus: '2'
           memory: 1G
         reservations:
-          cpus: "0.1"
+          cpus: '1'
+          memory: 512M
+
+  nginx:
+    restart: always
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deployment/nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - ./deployment/nginx/ssl:/etc/nginx/ssl:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
+        reservations:
+          cpus: '1'
           memory: 256M
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3100/ready"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s

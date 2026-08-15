@@ -1,72 +1,73 @@
-# backend/Dockerfile — NestJS backend (production-ready)
+# backend/Dockerfile — NestJS backend (production-optimized)
+# Multi-stage build with layer caching optimization
 
 FROM node:20-slim AS base
 
-# Install system dependencies
+# Install system dependencies once
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl openssl python3 make g++ \
-    && rm -rf /var/lib/apt/lists/*
+    curl openssl python3 make g++ ca-certificates \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # Install pnpm globally
 RUN npm install -g pnpm@9.15.0 && npm cache clean --force
 
-# ===== Stage 1: Builder =====
-FROM base AS builder
+# ===== Stage 1: Dependencies Layer =====
+FROM base AS dependencies
 
 WORKDIR /app
 
-# Copy workspace root files
+# Copy workspace config files (minimal, cacheable layer)
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 
-# Copy all source directories
+# Install dependencies only
+RUN pnpm install --frozen-lockfile --prefer-offline
+
+# ===== Stage 2: Source & Build =====
+FROM dependencies AS builder
+
+WORKDIR /app
+
+# Copy source code
 COPY backend/ ./backend/
 COPY packages/ ./packages/
 COPY shared/ ./shared/
 COPY database/ ./database/
 
-# Install all dependencies
-RUN pnpm install --frozen-lockfile
-
 # Build backend
-WORKDIR /app/backend
-RUN pnpm run build || true
-RUN mkdir -p dist && test -d dist || cp -r _shared dist/
+RUN pnpm --filter backend run build
 
-# ===== Stage 2: Runner =====
-FROM base AS runner
+# ===== Stage 3: Runtime =====
+FROM base AS runtime
 
-# Create non-root user
+# Create non-root user for security
 RUN groupadd --system --gid 1001 dayjoy && \
     useradd --system --uid 1001 --gid dayjoy --create-home dayjoy
 
 WORKDIR /app
 
-# Copy from builder
-COPY --from=builder --chown=dayjoy:dayjoy /app/node_modules ./node_modules
+# Copy node_modules from dependencies stage (faster, pruned)
+COPY --from=dependencies --chown=dayjoy:dayjoy /app/node_modules ./node_modules
+
+# Copy compiled backend
 COPY --from=builder --chown=dayjoy:dayjoy /app/backend/dist ./backend/dist
 COPY --from=builder --chown=dayjoy:dayjoy /app/backend/package.json ./backend/package.json
+
+# Copy shared dependencies
 COPY --from=builder --chown=dayjoy:dayjoy /app/packages ./packages
 COPY --from=builder --chown=dayjoy:dayjoy /app/shared ./shared
 COPY --from=builder --chown=dayjoy:dayjoy /app/database ./database
 
-# Symlink node_modules so compiled code can find them
-RUN ln -s /app/node_modules /app/backend/dist/node_modules || true
-
-# Switch to non-root user
+# Setup environment
 USER dayjoy
+ENV NODE_ENV=production \
+    NODE_PATH=/app/node_modules:/app/backend/node_modules \
+    PATH=/app/node_modules/.bin:$PATH
 
-WORKDIR /app
-
-ENV NODE_ENV=production
-ENV NODE_PATH=/app/node_modules:/app/backend/node_modules
-ENV PATH=/app/node_modules/.bin:$PATH
-
-# Expose port
 EXPOSE 3000
 
 # Health check
 HEALTHCHECK --interval=15s --timeout=10s --start-period=60s --retries=5 \
   CMD curl -f http://localhost:3000/health || exit 1
 
-# Start backend - rootDir is "./" so output goes to dist/main.js
+# Start backend
 CMD ["node", "backend/dist/main.js"]

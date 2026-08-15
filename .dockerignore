@@ -1,0 +1,74 @@
+# Git
+.git
+.gitignore
+.github
+.gitattributes
+
+# Dependencies
+node_modules
+pnpm-store
+
+# Build outputs
+dist
+.next
+out
+build
+coverage
+
+# Environment
+.env
+.env.local
+.env.*.local
+.env.production.template
+
+# Documentation
+*.md
+docs/
+_reference/
+ui-audit-reports/
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+
+# Monorepo tools
+.turbo
+.cache
+
+# Testing
+testing/
+test/
+*.test.ts
+*.spec.ts
+cypress/
+playwright/
+
+# Logs
+logs/
+*.log
+
+# Temporary
+tmp/
+temp/
+.turbopack
+
+# CI/CD
+.github/
+deployment/scripts/
+
+# Configuration docs
+PRODUCTION_*.md
+BACKEND_DESIGN.md
+VOICE_AI_DESIGN.md
+*.pdf
+worklog.md
+CHANGES_UPDATED.md
+CHANGELOG.md
+INVENTORY_REPORT.txt
+
+# Analytics
+analytics/
+monitoring/
