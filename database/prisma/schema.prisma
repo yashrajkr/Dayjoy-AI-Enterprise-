@@ -190,14 +190,24 @@ enum AuditAction {
 
 // 3. Core Models
 
+// NOTE: `status` is a plain String, not the `TenantStatus` enum, because the
+// deployed table (database/migrations/002_auth.sql) declares it VARCHAR(20)
+// with no CHECK constraint — a deliberate, authoritative choice — and the
+// application's own validation layer (backend/admin/dto/tenant.dto.ts)
+// already accepts 4 values (ACTIVE/SUSPENDED/TRIAL/CLOSED) that don't match
+// this file's TenantStatus enum (ACTIVE/SUSPENDED/DELETED). Matching Prisma
+// to a strict 3-value native enum would reject TRIAL/CLOSED writes that the
+// app already promises to accept. No code imports the generated TenantStatus
+// enum type directly, so this reconciliation is safe. See PrismaService /
+// the voice_sessions model below for the same authoritative-SQL precedent.
 model Tenant {
-  id        String       @id @default(uuid())
+  id        String   @id @default(uuid())
   name      String
-  slug      String       @unique
-  status    TenantStatus @default(ACTIVE)
+  slug      String   @unique
+  status    String   @default("ACTIVE")
   settings  Json?
-  createdAt DateTime     @default(now()) @map("created_at")
-  updatedAt DateTime     @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   users                   User[]
   userSessions            UserSession[]
