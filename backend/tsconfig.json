@@ -31,5 +31,24 @@
     }
   },
   "include": ["**/*.ts", "../rag/**/*.ts", "../vapi/**/*.ts", "../whatsapp-ai/**/*.ts"],
-  "exclude": ["node_modules", "dist", "test", "_express-reference", "automation"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test",
+    "_express-reference",
+    "automation",
+    "**/*.spec.ts",
+    "**/*.test.ts",
+    "**/*-tests.ts",
+    "**/*.e2e-spec.ts",
+    "../rag/**/*.spec.ts",
+    "../rag/**/*.test.ts",
+    "../rag/**/*-tests.ts",
+    "../vapi/**/*.spec.ts",
+    "../vapi/**/*.test.ts",
+    "../vapi/**/*-tests.ts",
+    "../whatsapp-ai/**/*.spec.ts",
+    "../whatsapp-ai/**/*.test.ts",
+    "../whatsapp-ai/**/*-tests.ts"
+  ]
 }

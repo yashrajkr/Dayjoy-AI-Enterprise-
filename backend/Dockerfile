@@ -18,19 +18,28 @@ WORKDIR /app
 # Copy workspace root files
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 
-# Copy all source directories
+# Copy all source directories (backend imports rag/, vapi/, and whatsapp-ai/
+# as sibling modules via ../rag, ../vapi, ../whatsapp-ai — see backend/tsconfig.json paths)
 COPY backend/ ./backend/
 COPY packages/ ./packages/
 COPY shared/ ./shared/
 COPY database/ ./database/
+COPY rag/ ./rag/
+COPY vapi/ ./vapi/
+COPY whatsapp-ai/ ./whatsapp-ai/
 
 # Install all dependencies
 RUN pnpm install --frozen-lockfile
 
+# Generate Prisma Client (schema lives outside backend/, so it is never
+# picked up by @prisma/client's automatic postinstall detection).
+# Pinned to 6.x: the schema uses the Prisma 6 `datasource.url` syntax, which
+# the Prisma 7 CLI (devDependency at the repo root) rejects.
+RUN npx prisma@6.19.3 generate --schema database/prisma/schema.prisma
+
 # Build backend
 WORKDIR /app/backend
-RUN pnpm run build || true
-RUN mkdir -p dist && test -d dist || cp -r _shared dist/
+RUN pnpm run build
 
 # ===== Stage 2: Runner =====
 FROM base AS runner
@@ -43,6 +52,7 @@ WORKDIR /app
 
 # Copy from builder
 COPY --from=builder --chown=dayjoy:dayjoy /app/node_modules ./node_modules
+COPY --from=builder --chown=dayjoy:dayjoy /app/backend/node_modules ./backend/node_modules
 COPY --from=builder --chown=dayjoy:dayjoy /app/backend/dist ./backend/dist
 COPY --from=builder --chown=dayjoy:dayjoy /app/backend/package.json ./backend/package.json
 COPY --from=builder --chown=dayjoy:dayjoy /app/packages ./packages

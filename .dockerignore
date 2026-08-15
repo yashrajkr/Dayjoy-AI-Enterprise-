@@ -1,0 +1,43 @@
+# Keep the Docker build context small and deterministic.
+# NOTE: individual Dockerfiles COPY only the directories they need, so it is
+# safe to exclude everything below at the repo root regardless of which
+# service (backend/vapi/whatsapp-ai/admin-dashboard) is being built.
+
+node_modules/
+**/node_modules/
+.pnpm-store/
+dist/
+**/dist/
+build/
+.next/
+.nuxt/
+.turbo/
+.cache/
+coverage/
+*.tsbuildinfo
+
+.git/
+.github/
+
+.env
+.env.*
+!.env.example
+!.env.production.template
+
+*.log
+logs/
+
+apps/
+docs/
+testing/
+monitoring/
+deployment/kubernetes/
+_reference/
+agent-ctx/
+ui-audit-reports/
+automation/
+scripts/
+
+*.md
+*.pdf
+worklog.md
