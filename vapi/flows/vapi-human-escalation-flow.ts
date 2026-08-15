@@ -9,10 +9,25 @@ import {
 /**
  * Human Escalation Flow
  *
- * The "I want to talk to a person" flow. Single-step:
- *   1. summarize  — acknowledge + summarize what we know (so the
- *                   human agent gets context)
- *   2. transfer   — invoke human_transfer tool with department + reason
+ * The "I want to talk to a person" flow. Escalates immediately on the
+ * turn it's entered — one response carries both the transition message
+ * ("I'm going to transfer you now...") AND the `human_transfer` tool
+ * call + `escalateToHuman: true`, rather than requiring a second
+ * round-trip to actually fire the transfer. An earlier version split
+ * this into two steps (`summarize` then a separate `transfer` step
+ * requiring the flow to be re-entered with `flowState.step:
+ * 'transfer'`), which meant a caller who invokes this flow once — the
+ * common case, since the manager enters it precisely because the
+ * customer just asked for a human — got only an acknowledgement with
+ * no actual transfer happening until some later turn re-drove the
+ * state machine. Getting the caller to a human fast is the entire
+ * point of this flow, so the extra hop was a genuine bug, not a
+ * deliberate UX choice.
+ *
+ * `close` remains a distinct, explicitly-entered step: the manager can
+ * re-enter here with `flowState.step: 'close'` if the transfer itself
+ * failed (e.g. after-hours, no agents available) to gracefully end the
+ * call instead of leaving the caller stuck.
  *
  * This flow is also entered by force when any other flow's response
  * sets `escalateToHuman: true` — the manager re-routes through here
@@ -24,26 +39,20 @@ export class VapiHumanEscalationFlow implements VapiFlow {
   private readonly logger = new Logger(VapiHumanEscalationFlow.name);
 
   async execute(context: FlowContext): Promise<FlowResponse> {
-    const step = context.flowState?.step ?? 'summarize';
+    const step = context.flowState?.step ?? 'greeting';
     this.logger.debug(`human_escalation step=${step} session=${context.sessionId}`);
 
-    switch (step) {
-      case 'summarize':
-        return this.summarize(context);
-      case 'transfer':
-        return this.transfer(context);
-      case 'close':
-        return this.close(context);
-      default:
-        return this.summarize(context);
+    if (step === 'close') {
+      return this.close(context);
     }
+    return this.transfer(context);
   }
 
   // -------------------------------------------------------------------
   // steps
   // -------------------------------------------------------------------
 
-  private summarize(context: FlowContext): FlowResponse {
+  private transfer(context: FlowContext): FlowResponse {
     const reason =
       context.flowState?.data?.reason ??
       this.inferReason(context.userMessage) ??
@@ -66,29 +75,20 @@ export class VapiHumanEscalationFlow implements VapiFlow {
       summaryParts.push(`topic: ${context.flowState.data.topic}`);
     }
     const summary = summaryParts.join('; ');
+    const department = this.inferDepartment(reason, context);
 
     return {
       message:
         "I understand you'd like to speak with a human agent. I'm going to transfer you now and share what we've discussed so you don't have to repeat yourself. Please stay on the line.",
-      nextStep: 'transfer',
-      collectedData: { reason, summary },
-    };
-  }
-
-  private transfer(context: FlowContext): FlowResponse {
-    const data = context.flowState?.data ?? {};
-    const department = this.inferDepartment(data.reason, context);
-    return {
-      message: `Transferring you to our ${department.replace(/_/g, ' ')} team now. Thank you for your patience.`,
       escalateToHuman: true,
-      escalateReason: data.reason ?? 'Customer requested human assistance',
+      escalateReason: reason,
       toolCalls: [
         {
           name: 'human_transfer',
           arguments: {
             department,
-            reason: data.reason ?? 'Customer requested human assistance',
-            summary: data.summary ?? '',
+            reason,
+            summary,
             customerId: context.customer?.id ?? '',
             conversationId: context.conversationId ?? '',
           },

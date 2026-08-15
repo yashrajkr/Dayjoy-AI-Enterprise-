@@ -77,6 +77,31 @@ export function createMockRedis() {
     // `pipeline` is itself a vi.fn so tests can use `mockReturnValueOnce`
     // to override the returned pipeline object per-call.
     pipeline: vi.fn(pipeline),
+    // Minimal EVAL support: real Redis executes Lua scripts atomically
+    // and single-threaded server-side. This mock has no Lua
+    // interpreter, but since JS itself is single-threaded and this
+    // implementation contains no `await` between reading and writing
+    // `store`, it reproduces the same atomicity guarantee for tests —
+    // concurrent `Promise.all`-driven callers can't interleave between
+    // the read and the write. Only supports the specific
+    // read-JSON/increment-field/write-JSON shape used by
+    // `VapiSessionMemory.incrementToolCalls` (matched by script
+    // content) since that's the only caller in this codebase; other
+    // scripts return `null` untouched rather than throwing, so tests
+    // exercising unrelated Redis paths aren't broken by this addition.
+    eval: vi.fn(
+      async (script: string, _numKeys: number, key: string, ttlSeconds: string, updatedAt: string) => {
+        if (!script.includes('toolCallsCount')) return null;
+        const raw = store.get(key);
+        if (!raw) return -1;
+        const data = JSON.parse(raw);
+        data.toolCallsCount = (data.toolCallsCount ?? 0) + 1;
+        data.updatedAt = updatedAt;
+        store.set(key, JSON.stringify(data));
+        void ttlSeconds; // TTL isn't modeled in this in-memory store
+        return data.toolCallsCount;
+      },
+    ),
     ping: vi.fn(async () => 'PONG'),
     quit: vi.fn(async () => 'OK'),
     disconnect: vi.fn(),

@@ -590,6 +590,15 @@ export class KnowledgeService {
    * write to the `vector(1536)` type through the standard model API, so
    * we use `$executeRaw` with a parameterised `UPDATE`.
    *
+   * IMPORTANT: this must use the exact same embedding model as
+   * {@link generateEmbedding} (Gemini `gemini-embedding-001` at 1536
+   * dimensions), NOT OpenAI. A prior version of this method called
+   * OpenAI's `text-embedding-3-small` here while `query()` embedded the
+   * search text via Gemini — both wrote/read the same `vector(1536)`
+   * column, but the two models' vector spaces aren't comparable, so
+   * every chunk ingested through this path would silently fail to
+   * match on `vectorSearch()`.
+   *
    * Failures are logged and swallowed — the chunks remain searchable via
    * the text-search fallback in `query()`.
    */
@@ -607,15 +616,16 @@ export class KnowledgeService {
       select: { id: true, chunkIndex: true },
     });
 
-    // Gemini's embedContent API takes one content per call (unlike
-    // OpenAI's batched endpoint) — reuse generateEmbedding() per chunk
-    // so there's a single source of truth for how query and ingest
-    // embeddings are produced.
-    for (let idx = 0; idx < chunks.length; idx++) {
-      const chunkRow = created.find((c: { id: string; chunkIndex: number }) => c.chunkIndex === idx);
-      if (!chunkRow) continue;
+    // Gemini's embedContent endpoint (as used by `generateEmbedding`)
+    // takes one text per request — no batch endpoint is wired up here,
+    // so we embed sequentially. Chunk counts per document are small
+    // (low hundreds at most), so this is an acceptable tradeoff for a
+    // best-effort, fire-and-forget ingest step.
+    for (const chunkRow of created) {
+      const chunk = chunks[chunkRow.chunkIndex];
+      if (!chunk) continue;
 
-      const embedding = await this.generateEmbedding(chunks[idx].content);
+      const embedding = await this.generateEmbedding(chunk.content);
       if (!embedding) continue;
 
       const vectorLiteral = `[${embedding.join(',')}]`;

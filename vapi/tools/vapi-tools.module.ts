@@ -16,6 +16,7 @@ import { VapiLeadCaptureTool } from './vapi-lead-capture-tool';
 import { VapiAppointmentBookingTool } from './vapi-appointment-booking-tool';
 import { VapiSupportTicketTool } from './vapi-support-ticket-tool';
 import { VapiHumanTransferTool } from './vapi-human-transfer-tool';
+import { VAPI_TOOL_REGISTRY } from '../webhooks/vapi-function-call-handler';
 
 /**
  * VapiToolsModule — provides all 8 Vapi tools + the central
@@ -57,6 +58,15 @@ import { VapiHumanTransferTool } from './vapi-human-transfer-tool';
     VapiAppointmentBookingTool,
     VapiSupportTicketTool,
     VapiHumanTransferTool,
+    // Bind the VAPI_TOOL_REGISTRY token that VapiFunctionCallHandler
+    // (vapi/webhooks/vapi-function-call-handler.ts) depends on via
+    // @Optional() @Inject(VAPI_TOOL_REGISTRY). This binding previously
+    // did not exist anywhere in the module graph — the handler's
+    // @Optional() decorator meant DI silently resolved it to
+    // `undefined` instead of throwing, so every tool call in
+    // production failed closed with TOOL_REGISTRY_UNAVAILABLE without
+    // any startup error to signal the misconfiguration.
+    { provide: VAPI_TOOL_REGISTRY, useExisting: VapiToolRegistry },
   ],
   exports: [
     VapiToolRegistry,
@@ -68,6 +78,7 @@ import { VapiHumanTransferTool } from './vapi-human-transfer-tool';
     VapiAppointmentBookingTool,
     VapiSupportTicketTool,
     VapiHumanTransferTool,
+    VAPI_TOOL_REGISTRY,
   ],
 })
 export class VapiToolsModule {}

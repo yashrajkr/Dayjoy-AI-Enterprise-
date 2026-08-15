@@ -312,6 +312,9 @@ export class VapiCallEndedHandler {
    * Coerce various Vapi payload shapes into one normalized form.
    */
   private normalize(call: VapiCallEndedInput): VapiCallEndedInput {
+    // Real Vapi Call objects put the caller's number under
+    // `customer.number`, not a top-level `from`/`phoneNumber` field.
+    const from = call.from ?? call.phoneNumber ?? (call as any).customer?.number;
     return {
       ...call,
       direction:
@@ -319,8 +322,8 @@ export class VapiCallEndedHandler {
         (call.type === 'outbound' || call.type === 'outbound-phone'
           ? 'OUTBOUND'
           : 'INBOUND'),
-      from: call.from ?? call.phoneNumber,
-      phoneNumber: call.phoneNumber ?? call.from,
+      from,
+      phoneNumber: call.phoneNumber ?? from,
       durationSeconds: call.durationSeconds ?? call.summary?.durationSeconds ?? 0,
     };
   }

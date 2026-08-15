@@ -145,14 +145,28 @@ export class VapiAssistantService {
         name: dto.name,
         type: (dto.type ?? VapiAssistantType.VOICE) as any,
         description: dto.description ?? null,
+        // Spread the static template FIRST so its defaults (serverUrl,
+        // serverMessages, backgroundSound, etc.) are present, then
+        // override with the actual per-assistant computed values last.
+        // The previous spread order was backwards — `VAPI_ASSISTANT_CONFIG`
+        // spread LAST clobbered `model`/`firstMessage`/`voiceId` back to
+        // the static placeholder defaults (`model.messages: [{content: ''}]`,
+        // `tools: []`), so the persisted `configuration` silently
+        // diverged from what was actually sent to Vapi in `vapiPayload`
+        // — e.g. the real system prompt was never recorded. `systemPrompt`
+        // is also stored directly (mirrors `updateAssistant()`'s shape)
+        // so `getAssistant`/UI code doesn't have to dig into
+        // `model.messages[0].content`.
         configuration: {
+          ...VAPI_ASSISTANT_CONFIG,
           vapiAssistantId,
           firstMessage,
-          model,
+          systemPrompt,
+          model: vapiPayload.model,
+          voice: vapiPayload.voice,
           temperature,
           maxTokens,
           voiceId,
-          ...VAPI_ASSISTANT_CONFIG,
         },
         capabilities: { tools: enabledToolNames },
         status: 'active',

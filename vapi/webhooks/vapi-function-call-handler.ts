@@ -45,6 +45,8 @@ export interface VapiToolExecutionResult {
   data?: any;
   error?: string;
   message?: string;
+  /** Natural-language text the assistant should say to the caller (the real `VapiTool`/`ToolResult` implementation's canonical field — see `vapi-tool-interface.ts`). */
+  speak?: string;
   latencyMs?: number;
 }
 
@@ -75,6 +77,8 @@ export interface VapiToolCall {
     arguments?: string; // JSON string in OpenAI format
   };
   arguments?: string | Record<string, any>;
+  /** Real Vapi `tool-calls` event shape: `toolCallList[i].parameters` — already a parsed object, not a JSON string. */
+  parameters?: Record<string, any>;
   toolCallId?: string;
 }
 
@@ -138,7 +142,7 @@ export class VapiFunctionCallHandler {
       toolCall.id ?? toolCall.toolCallId ?? `tc-${Date.now()}`;
     const toolName =
       toolCall.function?.name ?? toolCall.name ?? 'unknown';
-    const argsRaw = toolCall.function?.arguments ?? toolCall.arguments;
+    const argsRaw = toolCall.function?.arguments ?? toolCall.arguments ?? toolCall.parameters;
 
     let args: Record<string, any> = {};
     if (typeof argsRaw === 'string') {
@@ -292,6 +296,15 @@ export class VapiFunctionCallHandler {
         : { value: toolResult };
     if (memoryContextSummary) {
       enrichedResult.memoryContext = memoryContextSummary;
+    }
+    // `speak` is `ToolResult`'s canonical field for "what the assistant
+    // should literally say" (see vapi-tool-interface.ts) — several
+    // tools rely on it (e.g. search_knowledge's no-citations escalation
+    // message). Without forwarding it here, that guidance never reached
+    // Vapi's LLM; only the machine-readable `data` did.
+    const speakText = result.speak ?? result.message;
+    if (speakText) {
+      enrichedResult.speak = speakText;
     }
 
     return {
