@@ -175,7 +175,7 @@ export class ToolsService {
     }
     const order = await this.prisma.order.findFirst({
       where,
-      include: { items: true, customer: { select: { name: true, phone: true, email: true } } },
+      include: { items: true, customer: { select: { firstName: true, lastName: true, phone: true, email: true } } },
     });
     return order || { error: 'Order not found' };
   }
