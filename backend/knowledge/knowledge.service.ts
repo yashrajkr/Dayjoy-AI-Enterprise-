@@ -29,6 +29,9 @@ const DEFAULT_CHUNK_OVERLAP = 200;
 const DEFAULT_QUERY_TOP_K = 5;
 const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
 const DEFAULT_CHAT_MODEL = 'gpt-4o';
+/** Matches the model/dimensions the 882 canonical rag_chunks were embedded with. */
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001';
+const GEMINI_EMBEDDING_DIMENSIONS = 1536;
 
 export interface Citation {
   chunkId: string;
@@ -538,26 +541,46 @@ export class KnowledgeService {
   // ============================================================
 
   /**
-   * Generate an embedding for the supplied text via OpenAI's
-   * `text-embedding-3-small` model (1536 dims). Returns `null` if the
-   * API key is missing or the call fails — callers fall back to
-   * text-search mode in that case.
+   * Generate an embedding for the supplied text via Gemini's
+   * `gemini-embedding-001` model, requested at 1536 dimensions to match
+   * the `rag_chunks.embedding vector(1536)` column. Returns `null` if the
+   * API key is missing or the call fails — the caller (`query()`) falls
+   * back to text-search mode in that case.
+   *
+   * All 882 canonical rag_chunks were embedded via this exact model/
+   * endpoint/dimension combination — using anything else here would
+   * produce query vectors that aren't comparable to the stored ones.
    */
   private async generateEmbedding(text: string): Promise<number[] | null> {
-    const apiKey = this.config.get<string>('openai.apiKey');
+    const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return null;
 
     try {
-      const model =
-        this.config.get<string>('openai.embeddingModel') ?? DEFAULT_EMBEDDING_MODEL;
-      const response = await this.openai.embeddings.create({
-        model,
-        input: text,
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: `models/${GEMINI_EMBEDDING_MODEL}`,
+          content: { parts: [{ text }] },
+          outputDimensionality: GEMINI_EMBEDDING_DIMENSIONS,
+        }),
       });
-      return response.data?.[0]?.embedding ?? null;
+      if (!response.ok) {
+        const errBody = await response.text().catch(() => '');
+        throw new Error(`Gemini embedContent HTTP ${response.status}: ${errBody.slice(0, 300)}`);
+      }
+      const json = (await response.json()) as { embedding?: { values?: number[] } };
+      const values = json.embedding?.values;
+      if (!values || values.length !== GEMINI_EMBEDDING_DIMENSIONS) {
+        throw new Error(
+          `Unexpected embedding dimensions: got ${values?.length ?? 'none'}, expected ${GEMINI_EMBEDDING_DIMENSIONS}`,
+        );
+      }
+      return values;
     } catch (err) {
       this.logger.warn(
-        `OpenAI embedding generation failed: ${(err as Error).message}`,
+        `Gemini embedding generation failed: ${(err as Error).message}`,
       );
       return null;
     }
@@ -646,7 +669,7 @@ export class KnowledgeService {
           1 - (c.embedding <=> ${vectorLiteral}::vector) AS score
         FROM rag_chunks c
         LEFT JOIN rag_documents d ON d.id = c.document_id
-        WHERE c.tenant_id = ${tenantId}
+        WHERE c.tenant_id = ${tenantId}::uuid
           AND c.embedding IS NOT NULL
         ORDER BY c.embedding <=> ${vectorLiteral}::vector
         LIMIT ${topK}

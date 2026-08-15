@@ -9,8 +9,8 @@ if [ -f .env ]; then
   export $(grep -v '^#' .env | xargs 2>/dev/null || true)
 fi
 
-if [ -z "${OPENAI_API_KEY:-}" ]; then
-  echo "❌ OPENAI_API_KEY is not set in .env"
+if [ -z "${GEMINI_API_KEY:-}" ]; then
+  echo "❌ GEMINI_API_KEY is not set in .env"
   exit 1
 fi
 
@@ -20,7 +20,7 @@ if [ -z "${DATABASE_URL:-}" ]; then
 fi
 
 echo "  Database: ${DATABASE_URL%%@*}@****"
-echo "  OpenAI Key: ${OPENAI_API_KEY:0:10}..."
+echo "  Gemini Key: ${GEMINI_API_KEY:0:10}..."
 echo ""
 
 # Check if pg module is available

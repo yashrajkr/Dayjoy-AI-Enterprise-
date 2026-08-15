@@ -1,9 +1,16 @@
 #!/usr/bin/env node
 /**
  * generate-embeddings.mjs
- * Generates OpenAI embeddings for all RAG chunks where embedding IS NULL.
- * Uses text-embedding-3-small (1536 dimensions).
- * Batches 100 chunks per API call with 100ms delay between batches.
+ * Generates Gemini embeddings for all RAG chunks where embedding IS NULL.
+ * Uses gemini-embedding-001 requested at 1536 dimensions — the same
+ * model/endpoint/dimension combination backend/knowledge/knowledge.service.ts
+ * uses for query-time embeddings, and the one all 882 canonical rag_chunks
+ * were originally embedded with. Do not switch this back to OpenAI: the
+ * stored vectors and query vectors must come from the same model to be
+ * comparable via pgvector's cosine distance.
+ * One chunk per request (Gemini's embedContent API is single-content), with
+ * a rate-limit delay and exponential-backoff retry on HTTP 429. Resumable —
+ * only chunks with embedding IS NULL are selected, so re-running is safe.
  */
 
 import { readFileSync } from "fs";
@@ -20,33 +27,71 @@ try {
 } catch {}
 
 const DATABASE_URL = process.env.DATABASE_URL || "postgresql://dayjoy:dayjoy@localhost:5432/dayjoy_ai";
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const MODEL = "gemini-embedding-001";
+const DIMENSIONS = 1536;
+const DELAY_MS = 1100;
+const MAX_RETRIES = 5;
 
-if (!OPENAI_API_KEY) {
-  console.error("❌ OPENAI_API_KEY is not set in .env");
+if (!GEMINI_API_KEY) {
+  console.error("❌ GEMINI_API_KEY is not set in .env");
   process.exit(1);
 }
 
-console.log("▸ Dayjoy AI — Embedding Generation");
+console.log("▸ Dayjoy AI — Embedding Generation (Gemini)");
 console.log(`  Database: ${DATABASE_URL.replace(/:[^:@]+@/, ":****@")}`);
-console.log(`  OpenAI Key: ${OPENAI_API_KEY.slice(0, 10)}...`);
+console.log(`  Model: ${MODEL} (${DIMENSIONS} dims)`);
 console.log("");
 
-// We use dynamic import for pg since it may not be installed yet
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function embedText(text) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:embedContent?key=${GEMINI_API_KEY}`;
+  const body = {
+    model: `models/${MODEL}`,
+    content: { parts: [{ text: text.slice(0, 8000) }] },
+    outputDimensionality: DIMENSIONS,
+  };
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      const json = await res.json();
+      const values = json.embedding?.values;
+      if (!values || values.length !== DIMENSIONS) {
+        throw new Error(`Unexpected embedding shape: ${values ? values.length : "none"}`);
+      }
+      return values;
+    }
+    if (res.status === 429) {
+      const backoff = Math.min(60000, 5000 * attempt);
+      console.log(`  ⏳ Rate limited, attempt ${attempt}/${MAX_RETRIES}, backing off ${backoff}ms`);
+      await sleep(backoff);
+      continue;
+    }
+    const errText = await res.text().catch(() => "");
+    throw new Error(`Gemini API ${res.status}: ${errText.slice(0, 300)}`);
+  }
+  throw new Error("RATE_LIMIT_EXHAUSTED");
+}
+
 async function main() {
   let pg;
   try {
     pg = await import("pg");
   } catch {
     console.error("❌ 'pg' module not found. Install with: pnpm add pg");
-    console.error("  Or run via Docker: docker exec dayjoy-postgres psql -c '...'");
     process.exit(1);
   }
 
   const { Pool } = pg.default || pg;
   const pool = new Pool({ connectionString: DATABASE_URL });
 
-  // Count chunks without embeddings
   const { rows } = await pool.query(
     "SELECT COUNT(*) as count FROM rag_chunks WHERE embedding IS NULL AND status = 'READY'"
   );
@@ -59,76 +104,38 @@ async function main() {
     return;
   }
 
-  let processed = 0;
-  const batchSize = 100;
-  let errorCount = 0;
+  const pending = await pool.query(
+    `SELECT id, content FROM rag_chunks WHERE embedding IS NULL AND status = 'READY' ORDER BY created_at ASC`
+  );
 
-  while (processed < total) {
-    // Get next batch
-    const batch = await pool.query(
-      `SELECT id, content FROM rag_chunks
-       WHERE embedding IS NULL AND status = 'READY'
-       ORDER BY created_at ASC
-       LIMIT $1`,
-      [batchSize]
-    );
+  let done = 0;
+  let failed = 0;
+  let quotaStopped = false;
 
-    if (batch.rows.length === 0) break;
-
-    // Call OpenAI Embeddings API
+  for (const row of pending.rows) {
     try {
-      const response = await fetch("https://api.openai.com/v1/embeddings", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${OPENAI_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "text-embedding-3-small",
-          input: batch.rows.map((r) => r.content.slice(0, 8000)),
-        }),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`OpenAI API ${response.status}: ${errText}`);
+      const vec = await embedText(row.content);
+      const literal = "[" + vec.join(",") + "]";
+      await pool.query(`UPDATE rag_chunks SET embedding = $1::vector WHERE id = $2`, [literal, row.id]);
+      done++;
+      if (done % 25 === 0) {
+        console.log(`  Processed ${done}/${total} chunks (${Math.round((done / total) * 100)}%)`);
       }
-
-      const data = await response.json();
-
-      // Update each chunk with its embedding
-      for (let i = 0; i < batch.rows.length; i++) {
-        const chunkId = batch.rows[i].id;
-        const embedding = JSON.stringify(data.data[i].embedding);
-        await pool.query(
-          `UPDATE rag_chunks SET embedding = $1::vector WHERE id = $2`,
-          [embedding, chunkId]
-        );
-      }
-
-      processed += batch.rows.length;
-      console.log(`  Processed ${processed}/${total} chunks (${Math.round((processed / total) * 100)}%)`);
-
-      // Rate limit: 100ms delay
-      await new Promise((r) => setTimeout(r, 100));
+      await sleep(DELAY_MS);
     } catch (err) {
-      errorCount++;
-      console.error(`  ❌ Batch failed: ${err.message}`);
-
-      if (errorCount >= 5) {
-        console.error("❌ Too many errors (5). Aborting.");
+      if (err.message === "RATE_LIMIT_EXHAUSTED" || /quota|RESOURCE_EXHAUSTED/i.test(err.message)) {
+        console.log(`  ❌ Quota exhausted — stopping. Last chunk: ${row.id}`);
+        quotaStopped = true;
         break;
       }
-
-      // Wait 2s before retry
-      await new Promise((r) => setTimeout(r, 2000));
+      failed++;
+      console.error(`  ❌ Chunk ${row.id} failed: ${err.message}`);
     }
   }
 
   console.log("");
-  console.log(`✅ Embedding generation complete: ${processed}/${total} chunks processed`);
+  console.log(`✅ Embedding generation complete: ${done}/${total} chunks processed (${failed} failed, quota_stopped=${quotaStopped})`);
 
-  // Verify
   const { rows: verifyRows } = await pool.query(
     "SELECT COUNT(*) as total, COUNT(embedding) as embedded FROM rag_chunks WHERE status = 'READY'"
   );
