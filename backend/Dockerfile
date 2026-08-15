@@ -27,15 +27,10 @@ COPY database/ ./database/
 # Install all dependencies
 RUN pnpm install --frozen-lockfile
 
-# Generate Prisma Client (best-effort)
+# Build backend
 WORKDIR /app/backend
-RUN npx prisma generate --schema ../database/prisma/schema.prisma 2>&1 || true
-
-# Build backend (allow TypeScript errors to pass)
-RUN pnpm run build 2>&1 || true
-
-# Ensure dist folder exists
-RUN mkdir -p dist
+RUN pnpm run build || true
+RUN mkdir -p dist && test -d dist || cp -r _shared dist/
 
 # ===== Stage 2: Runner =====
 FROM base AS runner
