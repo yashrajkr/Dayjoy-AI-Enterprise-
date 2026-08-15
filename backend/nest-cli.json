@@ -4,7 +4,9 @@
   "sourceRoot": ".",
   "compilerOptions": {
     "deleteOutDir": true,
-    "tsConfigPath": "tsconfig.json"
+    "tsConfigPath": "tsconfig.json",
+    "webpackPath": "webpack.config.js",
+    "manualRestart": false
   },
   "exclude": ["node_modules", "dist", "test", "_express-reference", "automation"]
 }

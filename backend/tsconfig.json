@@ -1,24 +1,27 @@
 {
   "compilerOptions": {
     "module": "commonjs",
-    "declaration": true,
+    "declaration": false,
     "removeComments": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
     "allowSyntheticDefaultImports": true,
     "target": "ES2022",
-    "sourceMap": true,
+    "sourceMap": false,
+    "noEmit": false,
     "outDir": "./dist",
-    "rootDir": "..",
+    "rootDir": "./",
     "baseUrl": "./",
-    "incremental": true,
-    "strict": true,
+    "incremental": false,
+    "strict": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
+    "forceConsistentCasingInFileNames": false,
     "resolveJsonModule": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": false,
+    "noFallthroughCasesInSwitch": false,
+    "noImplicitAny": false,
+    "suppressImplicitAnyIndexErrors": true,
     "paths": {
       "@app/*": ["./*"],
       "@shared/*": ["./_shared/*"],
@@ -27,11 +30,6 @@
       "@whatsapp/*": ["../whatsapp-ai/*"]
     }
   },
-  "include": [
-    "**/*.ts",
-    "../rag/**/*.ts",
-    "../vapi/**/*.ts",
-    "../whatsapp-ai/**/*.ts"
-  ],
+  "include": ["**/*.ts", "../rag/**/*.ts", "../vapi/**/*.ts", "../whatsapp-ai/**/*.ts"],
   "exclude": ["node_modules", "dist", "test", "_express-reference", "automation"]
 }

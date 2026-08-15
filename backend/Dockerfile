@@ -49,8 +49,17 @@ COPY --from=builder --chown=dayjoy:dayjoy /app/packages ./packages
 COPY --from=builder --chown=dayjoy:dayjoy /app/shared ./shared
 COPY --from=builder --chown=dayjoy:dayjoy /app/database ./database
 
+# Symlink node_modules so compiled code can find them
+RUN ln -s /app/node_modules /app/backend/dist/node_modules || true
+
 # Switch to non-root user
 USER dayjoy
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV NODE_PATH=/app/node_modules:/app/backend/node_modules
+ENV PATH=/app/node_modules/.bin:$PATH
 
 # Expose port
 EXPOSE 3000
@@ -59,5 +68,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=10s --start-period=60s --retries=5 \
   CMD curl -f http://localhost:3000/health || exit 1
 
-# Start backend
+# Start backend - rootDir is "./" so output goes to dist/main.js
 CMD ["node", "backend/dist/main.js"]
