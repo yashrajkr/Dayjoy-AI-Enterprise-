@@ -4,6 +4,8 @@ import {
   FlowContext,
   FlowResponse,
   VapiFlow,
+  isEscalationRequest,
+  buildMidFlowEscalationResponse,
 } from './vapi-flow-types';
 
 /**
@@ -27,6 +29,10 @@ export class VapiAppointmentBookingFlow implements VapiFlow {
   private readonly logger = new Logger(VapiAppointmentBookingFlow.name);
 
   async execute(context: FlowContext): Promise<FlowResponse> {
+    if (isEscalationRequest(context.userMessage)) {
+      return buildMidFlowEscalationResponse(context, 'customer_service');
+    }
+
     const step = context.flowState?.step ?? 'ask_date';
     this.logger.debug(`appointment_booking step=${step} session=${context.sessionId}`);
 

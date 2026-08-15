@@ -191,6 +191,51 @@ describe('VapiWebhook', () => {
   });
 
   // =========================================================================
+  // Shared-secret verification (X-Vapi-Secret) — Vapi's default auth
+  // mechanism for `assistant.server.secret`, distinct from the HMAC path.
+  // =========================================================================
+  describe('verifySharedSecret', () => {
+    let service: VapiWebhookService;
+
+    beforeEach(() => {
+      process.env.VAPI_WEBHOOK_SECRET = 'test-secret';
+      service = new VapiWebhookService(
+        {} as any,
+        {} as any,
+        {} as any,
+        {} as any,
+        makePrismaMock(),
+        createMockRedis() as any,
+      );
+    });
+
+    it('accepts a matching secret', () => {
+      expect(service.verifySharedSecret('test-secret')).toBe(true);
+    });
+
+    it('rejects a mismatched secret', () => {
+      expect(service.verifySharedSecret('wrong-secret')).toBe(false);
+    });
+
+    it('rejects an empty/undefined header', () => {
+      expect(service.verifySharedSecret(undefined)).toBe(false);
+    });
+
+    it('returns false when VAPI_WEBHOOK_SECRET is unset', () => {
+      process.env.VAPI_WEBHOOK_SECRET = '';
+      const serviceWithoutSecret = new VapiWebhookService(
+        {} as any,
+        {} as any,
+        {} as any,
+        {} as any,
+        makePrismaMock(),
+        createMockRedis() as any,
+      );
+      expect(serviceWithoutSecret.verifySharedSecret('anything')).toBe(false);
+    });
+  });
+
+  // =========================================================================
   // Routing — process()
   // =========================================================================
   describe('process (event routing)', () => {
@@ -375,9 +420,9 @@ describe('VapiWebhook', () => {
       };
       await service.process(event);
 
-      // Only the first tool call is executed (Vapi's function-call event
-      // is one-at-a-time in the current API).
-      expect(functionCallHandler.handle).toHaveBeenCalledTimes(1);
+      // Every tool call in the batch is executed — Vapi expects a
+      // `results` entry per toolCallId it sent, not just the first.
+      expect(functionCallHandler.handle).toHaveBeenCalledTimes(2);
     });
 
     it('returns "no_tool_call" when a function-call event has no toolCalls', async () => {
@@ -389,6 +434,73 @@ describe('VapiWebhook', () => {
 
       expect(result.data).toMatchObject({ status: 'no_tool_call' });
       expect(functionCallHandler.handle).not.toHaveBeenCalled();
+    });
+
+    it('routes tool-calls (current Vapi event name) using toolCallList, executing every call and shaping results', async () => {
+      functionCallHandler.handle
+        .mockResolvedValueOnce({ toolCallId: 'tc1', toolName: 'search_knowledge', success: true, result: { answer: 'x' }, latencyMs: 5 })
+        .mockResolvedValueOnce({ toolCallId: 'tc2', toolName: 'search_products', success: true, result: { items: [] }, latencyMs: 5 });
+
+      const event = {
+        type: 'tool-calls',
+        call: { id: 'call-1' },
+        toolCallList: [
+          { id: 'tc1', name: 'search_knowledge', parameters: { query: 'x' } },
+          { id: 'tc2', name: 'search_products', parameters: { query: 'y' } },
+        ],
+      };
+      const result = await service.process(event);
+
+      expect(functionCallHandler.handle).toHaveBeenCalledTimes(2);
+      expect(result.data.results).toEqual([
+        { toolCallId: 'tc1', name: 'search_knowledge', result: JSON.stringify({ answer: 'x' }) },
+        { toolCallId: 'tc2', name: 'search_products', result: JSON.stringify({ items: [] }) },
+      ]);
+    });
+
+    it('routes a status-update with status "in-progress" to the call-started handler', async () => {
+      const event = {
+        type: 'status-update',
+        status: 'in-progress',
+        call: { id: 'call-1', customer: { number: '+15551234567' } },
+      };
+      await service.process(event);
+
+      expect(callStartedHandler.handle).toHaveBeenCalled();
+    });
+
+    it('acknowledges a status-update with status "ringing" without invoking the call-started handler', async () => {
+      const event = {
+        type: 'status-update',
+        status: 'ringing',
+        call: { id: 'call-1' },
+      };
+      const result = await service.process(event);
+
+      expect(result.data).toMatchObject({ status: 'acknowledged', callStatus: 'ringing' });
+      expect(callStartedHandler.handle).not.toHaveBeenCalled();
+    });
+
+    it('routes end-of-call-report to the call-ended handler with a normalized summary', async () => {
+      const event = {
+        type: 'end-of-call-report',
+        endedReason: 'customer-ended-call',
+        call: { id: 'call-1', startedAt: '2026-01-01T00:00:00.000Z', endedAt: '2026-01-01T00:05:00.000Z' },
+        artifact: { transcript: 'AI: hi\nUser: bye', recording: { recordingUrl: 'https://x/y.mp3' } },
+        cost: 0.42,
+      };
+      await service.process(event);
+
+      expect(callEndedHandler.handle).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'call-1',
+          durationSeconds: 300,
+          recordingUrl: 'https://x/y.mp3',
+          transcript: 'AI: hi\nUser: bye',
+          summary: expect.objectContaining({ outcome: 'COMPLETED', costUsd: 0.42 }),
+        }),
+        event,
+      );
     });
   });
 

@@ -4,6 +4,8 @@ import {
   FlowContext,
   FlowResponse,
   VapiFlow,
+  isEscalationRequest,
+  buildMidFlowEscalationResponse,
 } from './vapi-flow-types';
 
 /**
@@ -28,6 +30,10 @@ export class VapiLeadCollectionFlow implements VapiFlow {
   private readonly logger = new Logger(VapiLeadCollectionFlow.name);
 
   async execute(context: FlowContext): Promise<FlowResponse> {
+    if (isEscalationRequest(context.userMessage)) {
+      return buildMidFlowEscalationResponse(context, 'customer_service');
+    }
+
     const step = context.flowState?.step ?? 'ask_name';
     this.logger.debug(`lead_collection step=${step} session=${context.sessionId}`);
 

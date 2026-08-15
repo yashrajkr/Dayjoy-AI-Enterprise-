@@ -4,6 +4,8 @@ import {
   FlowContext,
   FlowResponse,
   VapiFlow,
+  isEscalationRequest,
+  buildMidFlowEscalationResponse,
 } from './vapi-flow-types';
 
 /**
@@ -23,6 +25,14 @@ export class VapiProductInquiryFlow implements VapiFlow {
   private readonly logger = new Logger(VapiProductInquiryFlow.name);
 
   async execute(context: FlowContext): Promise<FlowResponse> {
+    // A caller can ask for a human at any step, not just the first
+    // turn — check before dispatching to the current step so an
+    // escalation request mid-flow doesn't get swallowed by whatever
+    // step-specific regex happens to be active.
+    if (isEscalationRequest(context.userMessage)) {
+      return buildMidFlowEscalationResponse(context, 'sales');
+    }
+
     const step = context.flowState?.step ?? 'greeting';
     this.logger.debug(`product_inquiry step=${step} session=${context.sessionId}`);
 

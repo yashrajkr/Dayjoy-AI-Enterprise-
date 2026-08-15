@@ -27,7 +27,6 @@ import type OpenAI from 'openai';
 const DEFAULT_CHUNK_SIZE = 1000;
 const DEFAULT_CHUNK_OVERLAP = 200;
 const DEFAULT_QUERY_TOP_K = 5;
-const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
 const DEFAULT_CHAT_MODEL = 'gpt-4o';
 /** Matches the model/dimensions the 882 canonical rag_chunks were embedded with. */
 const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001';
@@ -591,6 +590,15 @@ export class KnowledgeService {
    * write to the `vector(1536)` type through the standard model API, so
    * we use `$executeRaw` with a parameterised `UPDATE`.
    *
+   * IMPORTANT: this must use the exact same embedding model as
+   * {@link generateEmbedding} (Gemini `gemini-embedding-001` at 1536
+   * dimensions), NOT OpenAI. A prior version of this method called
+   * OpenAI's `text-embedding-3-small` here while `query()` embedded the
+   * search text via Gemini — both wrote/read the same `vector(1536)`
+   * column, but the two models' vector spaces aren't comparable, so
+   * every chunk ingested through this path would silently fail to
+   * match on `vectorSearch()`.
+   *
    * Failures are logged and swallowed — the chunks remain searchable via
    * the text-search fallback in `query()`.
    */
@@ -598,36 +606,26 @@ export class KnowledgeService {
     documentId: string,
     chunks: Array<{ content: string }>,
   ) {
-    const apiKey = this.config.get<string>('openai.apiKey');
-    if (!apiKey) return;
+    if (!process.env.GEMINI_API_KEY) return;
 
-    const model =
-      this.config.get<string>('openai.embeddingModel') ?? DEFAULT_EMBEDDING_MODEL;
-
-    // Generate embeddings in a single batched call (OpenAI supports up
-    // to 2048 inputs per request — well above our chunk count per
-    // document).
-    const response = await this.openai.embeddings.create({
-      model,
-      input: chunks.map((c) => c.content),
-    });
-
-    if (!response.data || response.data.length === 0) return;
-
-    // Persist each embedding via raw SQL `UPDATE rag_chunks SET
-    // embedding = $1::vector WHERE id = $2`. We need the chunk IDs —
-    // fetch them by documentId + chunkIndex.
     const created = await this.prisma.ragChunk.findMany({
       where: { documentId },
       select: { id: true, chunkIndex: true },
     });
 
-    for (const emb of response.data) {
-      const idx = emb.index;
-      const chunkRow = created.find((c: { id: string; chunkIndex: number }) => c.chunkIndex === idx);
-      if (!chunkRow) continue;
+    // Gemini's embedContent endpoint (as used by `generateEmbedding`)
+    // takes one text per request — no batch endpoint is wired up here,
+    // so we embed sequentially. Chunk counts per document are small
+    // (low hundreds at most), so this is an acceptable tradeoff for a
+    // best-effort, fire-and-forget ingest step.
+    for (const chunkRow of created) {
+      const chunk = chunks[chunkRow.chunkIndex];
+      if (!chunk) continue;
 
-      const vectorLiteral = `[${emb.embedding.join(',')}]`;
+      const embedding = await this.generateEmbedding(chunk.content);
+      if (!embedding) continue;
+
+      const vectorLiteral = `[${embedding.join(',')}]`;
       try {
         // `$executeRaw` with `Prisma.sql` is the only way to write to a
         // `vector` column — Prisma's typed model API doesn't support it.

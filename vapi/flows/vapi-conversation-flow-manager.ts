@@ -219,11 +219,18 @@ export class VapiConversationFlowManager {
     if (/\b(human|agent|representative|manager|supervisor|talk to (a )?person)\b/.test(t)) {
       return { intent: FlowType.HUMAN_ESCALATION, confidence: 0.95 };
     }
-    if (/\b(buy|price|cost|how much|product|catalog|item|in stock)\b/.test(t)) {
-      return { intent: FlowType.PRODUCT_INQUIRY, confidence: 0.85 };
-    }
+    // Checked BEFORE product_inquiry: a message mentioning a return,
+    // refund, complaint, or delivery problem is a support case even
+    // when it also mentions "product" (e.g. "I want to return this
+    // product") — the old order let the generic `product` keyword in
+    // the product_inquiry regex win over the more specific
+    // support-intent signal, misrouting every return/refund/complaint
+    // message that happened to say "product".
     if (/\b(order|delivery|shipment|track|return|refund|complaint|issue|problem|broken|damaged)\b/.test(t)) {
       return { intent: FlowType.CUSTOMER_SUPPORT, confidence: 0.9 };
+    }
+    if (/\b(buy|price|cost|how much|product|catalog|item|in stock)\b/.test(t)) {
+      return { intent: FlowType.PRODUCT_INQUIRY, confidence: 0.85 };
     }
     if (/\b(distributor|commission|rank|downline|upline|payout)\b/.test(t)) {
       return { intent: FlowType.DISTRIBUTOR_SUPPORT, confidence: 0.9 };

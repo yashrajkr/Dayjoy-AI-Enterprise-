@@ -151,16 +151,46 @@ export class VapiSessionMemory {
 
   /**
    * Increment the tool-call counter atomically. Avoids the
-   * read-merge-write race when two tool calls fire near-simultaneously.
+   * read-merge-write race when two tool calls fire near-simultaneously
+   * — which now happens routinely: `VapiWebhookService`'s `tool-calls`
+   * route executes every call in a batch concurrently via
+   * `Promise.all`, so multiple `incrementToolCalls` calls for the same
+   * session commonly overlap in a single turn.
+   *
+   * The session blob is a single JSON string (not a Redis hash), so a
+   * true atomic single-field increment isn't available directly.
+   * WATCH/MULTI optimistic locking was considered but rejected: this
+   * service is a singleton sharing ONE ioredis connection across all
+   * concurrent callers, and WATCH is scoped to the *connection*, not
+   * to an individual logical call — two concurrent
+   * `incrementToolCalls()` invocations would clobber each other's
+   * watch state on that shared connection, defeating the whole
+   * mechanism. A Lua script sidesteps that entirely: Redis executes
+   * scripts atomically and single-threaded server-side, so there's no
+   * connection-sharing race to reason about, regardless of how many
+   * concurrent JS callers share the client.
    */
+  private static readonly INCREMENT_SCRIPT = `
+    local raw = redis.call('GET', KEYS[1])
+    if not raw then return -1 end
+    local data = cjson.decode(raw)
+    data.toolCallsCount = (data.toolCallsCount or 0) + 1
+    data.updatedAt = ARGV[2]
+    redis.call('SET', KEYS[1], cjson.encode(data), 'EX', ARGV[1])
+    return data.toolCallsCount
+  `;
+
   async incrementToolCalls(sessionId: string): Promise<number> {
-    const data = await this.getAll(sessionId);
-    if (!data) return 0;
-    const next = (data.toolCallsCount ?? 0) + 1;
-    data.toolCallsCount = next;
-    data.updatedAt = new Date().toISOString();
-    await this.persist(sessionId, data);
-    return next;
+    const key = this.sessionKey(sessionId);
+    const result = await this.redis.eval(
+      VapiSessionMemory.INCREMENT_SCRIPT,
+      1,
+      key,
+      String(SESSION_TTL_SECONDS),
+      new Date().toISOString(),
+    );
+    const next = Number(result);
+    return next < 0 ? 0 : next;
   }
 
   // -------------------------------------------------------------------

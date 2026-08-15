@@ -7,10 +7,10 @@ import swc from 'unplugin-swc';
  * framework.
  *
  * Covers four test layers (all Vitest-based):
- *  - `testing/unit/**/*.test.ts`        — mocked deps, no DB
- *  - `testing/integration/**/*.test.ts` — real test DB, mocked external APIs
- *  - `testing/api/**/*.test.ts`         — supertest + real test DB
- *  - `testing/database/**/*.test.ts`    — direct DB connection
+ *  - `testing/unit/**\/*.test.ts`        — mocked deps, no DB
+ *  - `testing/integration/**\/*.test.ts` — real test DB, mocked external APIs
+ *  - `testing/api/**\/*.test.ts`         — supertest + real test DB
+ *  - `testing/database/**\/*.test.ts`    — direct DB connection
  *
  * The backend's own `backend/vitest.config.ts` (which picks up the
  * per-module `*.spec.ts` files next to source) is the **canonical**

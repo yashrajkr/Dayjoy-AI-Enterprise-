@@ -123,3 +123,60 @@ export interface IntentResult {
   confidence: number;
   entities?: Record<string, any>;
 }
+
+/**
+ * Escalation-phrase matcher shared by every flow's `execute()`. A
+ * caller can ask for a human at ANY point mid-flow, not just when the
+ * top-level intent classifier happens to route to
+ * `FlowType.HUMAN_ESCALATION` on the very first turn — e.g. someone
+ * three turns into `product_inquiry` who suddenly says "I want to talk
+ * to a person" needs to escalate immediately, not finish the current
+ * flow first. Each non-escalation flow checks this at the top of its
+ * own `execute()` and, on a match, hands off to
+ * `FlowType.HUMAN_ESCALATION`-shaped behavior itself rather than
+ * silently continuing its own step machine.
+ *
+ * Mirrors the phrase list in
+ * `vapi/webhooks/vapi-transcript-handler.ts`'s `detectEscalation()` —
+ * that one flags the session for later reporting; this one drives
+ * live in-call behavior.
+ */
+const ESCALATION_PHRASE_PATTERN =
+  /\b(human|agent|representative|real person|talk to (a )?person|speak to (a )?(human|person)|manager|supervisor)\b/i;
+
+export function isEscalationRequest(userMessage: string): boolean {
+  return ESCALATION_PHRASE_PATTERN.test(userMessage ?? '');
+}
+
+/**
+ * Build the standard escalation `FlowResponse` a flow returns when
+ * {@link isEscalationRequest} matches mid-flow. Shared so every flow
+ * produces the same shape `VapiHumanEscalationFlow` itself returns
+ * (message + `escalateToHuman: true` + a `human_transfer` tool call +
+ * `isComplete: true`), rather than each flow inventing its own
+ * variant.
+ */
+export function buildMidFlowEscalationResponse(
+  context: FlowContext,
+  department: string,
+): FlowResponse {
+  return {
+    message:
+      "I understand you'd like to speak with a human agent. I'm going to transfer you now. Please stay on the line.",
+    escalateToHuman: true,
+    escalateReason: 'Customer asked for a human agent mid-flow',
+    toolCalls: [
+      {
+        name: 'human_transfer',
+        arguments: {
+          department,
+          reason: 'Customer asked for a human agent mid-flow',
+          customerId: context.customer?.id ?? '',
+          conversationId: context.conversationId ?? '',
+        },
+      },
+    ],
+    isComplete: true,
+    endCall: false,
+  };
+}
