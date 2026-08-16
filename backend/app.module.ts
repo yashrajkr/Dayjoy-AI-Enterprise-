@@ -1,5 +1,6 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { AppController } from './app.controller';
 
 // ---- Shared infrastructure (cross-cutting) ---------------------------
 import { ConfigModule } from './_shared/config/config.module';
@@ -220,6 +221,7 @@ import { WhatsAppModule } from '../whatsapp-ai/whatsapp.module';
     // ToolsService, RAG) — it does NOT spin up a separate AI system.
     WhatsAppModule,
   ],
+  controllers: [AppController],
   providers: [
     // Global exception filter — formats every error as a standard envelope.
     {
