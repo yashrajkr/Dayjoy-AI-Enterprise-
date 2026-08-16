@@ -76,6 +76,17 @@ async function bootstrap() {
   const port = configService.get<number>('PORT') ?? 3000;
   const env = configService.get<string>('NODE_ENV') ?? 'development';
 
+  // ---- Trust proxy -----------------------------------------------------
+  // Render (like Heroku/Fly/any PaaS behind a load balancer) terminates
+  // TLS and forwards requests with an `X-Forwarded-For` header. Without
+  // this, Express's default `trust proxy: false` makes express-rate-limit's
+  // X-Forwarded-For validation throw (`ERR_ERL_UNEXPECTED_X_FORWARDED_FOR`),
+  // which was surfacing as intermittent 500s on `/api/*` routes. `1` trusts
+  // exactly one hop (Render's edge proxy), which also makes `req.ip` /
+  // `express-rate-limit`'s IP-based keying reflect the real client IP
+  // instead of Render's internal proxy IP.
+  app.set('trust proxy', 1);
+
   // ---- Body parsers --------------------------------------------------
   app.use(json({ limit: '10mb' }));
   app.use(urlencoded({ extended: true, limit: '10mb' }));
