@@ -75,7 +75,11 @@ describe('IngestionService', () => {
     prisma = createMockPrismaService();
     // $transaction callback form — invoke the callback with the mock.
     prisma.$transaction = vi.fn(async (cb: any) => (typeof cb === 'function' ? cb(prisma) : cb));
-    prisma.ragSource.upsert = vi.fn().mockResolvedValue({ id: 'src-1', tenantId: 't1', name: 'Test' });
+    // resolveSource() is a find-or-create (no DB-level unique constraint on
+    // (tenantId, name) to `upsert` against) — findFirst() returns nothing by
+    // default, so it falls through to create().
+    prisma.ragSource.findFirst = vi.fn().mockResolvedValue(null);
+    prisma.ragSource.create = vi.fn().mockResolvedValue({ id: 'src-1', tenantId: 't1', name: 'Test' });
     prisma.ragSource.findUnique = vi.fn();
     prisma.ragDocument.create = vi.fn().mockResolvedValue({ id: 'doc-1', tenantId: 't1' });
     prisma.ragDocument.update = vi.fn().mockResolvedValue({});
@@ -151,8 +155,9 @@ describe('IngestionService', () => {
       expect(result.documentId).toBe('doc-1');
       expect(result.chunkCount).toBe(2);
 
-      // Source upsert.
-      expect(prisma.ragSource.upsert).toHaveBeenCalledTimes(1);
+      // Source resolved (find-or-create; not found, so it's created).
+      expect(prisma.ragSource.findFirst).toHaveBeenCalledTimes(1);
+      expect(prisma.ragSource.create).toHaveBeenCalledTimes(1);
       // Document create.
       expect(prisma.ragDocument.create).toHaveBeenCalledTimes(1);
       // Chunking called.
@@ -364,7 +369,8 @@ describe('IngestionService', () => {
       expect(prisma.ragSource.findUnique).toHaveBeenCalledWith({
         where: { id: 'src-existing' },
       });
-      expect(prisma.ragSource.upsert).not.toHaveBeenCalled();
+      expect(prisma.ragSource.findFirst).not.toHaveBeenCalled();
+      expect(prisma.ragSource.create).not.toHaveBeenCalled();
     });
 
     it('throws NotFoundException when sourceId is provided but not found', async () => {

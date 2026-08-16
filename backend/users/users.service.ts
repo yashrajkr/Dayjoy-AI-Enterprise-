@@ -232,11 +232,11 @@ export class UsersService {
 
   /**
    * Internal-use lookup (login, password-reset, etc.) — NOT tenant scoped.
-   * Email is globally unique on the schema, so a single `findUnique`
-   * suffices.
+   * Email is unique per-tenant (`@@unique([tenantId, email])`), not
+   * globally, so this uses `findFirst` rather than `findUnique`.
    */
   async findByEmail(email: string) {
-    return this.prisma.user.findUnique({
+    return this.prisma.user.findFirst({
       where: { email },
       include: {
         userRoles: {
@@ -255,7 +255,7 @@ export class UsersService {
   // -------------------------------------------------------------------
 
   async create(dto: CreateUserDto, currentUser: AuthenticatedUser) {
-    const existing = await this.prisma.user.findUnique({
+    const existing = await this.prisma.user.findFirst({
       where: { email: dto.email },
     });
     if (existing) {

@@ -14,28 +14,14 @@ import {
 } from './dto/query-products.dto';
 
 /**
- * Build a MockPrismaService extended with the inventory + inventoryTransaction
- * + auditLog models that the new ProductsService uses (the shared mock in
- * `_shared/testing/` predates the inventory models and doesn't include them).
+ * The shared mock now carries the `inventory` + `inventoryTransaction`
+ * models. It must NOT be spread-extended here: the mock's `$transaction`
+ * hands the callback the object it closed over at construction time, so a
+ * spread copy would give the test different `vi.fn()`s than the ones the
+ * service sees inside a transaction (mocked return values would be lost).
  */
 function createExtendedMockPrisma() {
-  return {
-    ...createMockPrismaService(),
-    inventory: {
-      findUnique: vi.fn(),
-      findMany: vi.fn(),
-      create: vi.fn(),
-      update: vi.fn(),
-      upsert: vi.fn(),
-      count: vi.fn(),
-    },
-    inventoryTransaction: {
-      findUnique: vi.fn(),
-      findMany: vi.fn(),
-      create: vi.fn(),
-      count: vi.fn(),
-    },
-  };
+  return createMockPrismaService();
 }
 
 const USER: AuthUser = { userId: 'u1', tenantId: 't1', email: 'a@b.c' };

@@ -51,13 +51,23 @@ const USER = { userId: 'u1', tenantId: 't1', email: 'a@b.c' };
 describe('NotificationsService', () => {
   let service: NotificationsService;
   let prisma: ReturnType<typeof createExtendedMockPrisma>;
-  let templatesService: { findByCode: ReturnType<typeof vi.fn> };
+  let templatesService: {
+    findByCode: ReturnType<typeof vi.fn>;
+    render: ReturnType<typeof vi.fn>;
+  };
   let emailProvider: { dispatch: ReturnType<typeof vi.fn<[], Promise<ProviderDispatchResult>>> };
 
   beforeEach(async () => {
     prisma = createExtendedMockPrisma();
+    // `render()` is a pure `{{var}}` substitution with no Prisma access, so
+    // the mock delegates to the real implementation — the template tests
+    // assert on actually-rendered output.
+    const realTemplates = new TemplatesService(null as never);
     templatesService = {
       findByCode: vi.fn().mockResolvedValue(null), // no template by default
+      render: vi.fn((template, variables) =>
+        realTemplates.render(template, variables),
+      ),
     };
     emailProvider = {
       dispatch: vi.fn().mockResolvedValue({ success: true, providerMessageId: 'pmsg-1' }),
@@ -237,6 +247,8 @@ describe('NotificationsService', () => {
         .mockResolvedValueOnce({ success: false, errorMessage: 'fail' })
         .mockResolvedValueOnce({ success: true, providerMessageId: 'ok' });
 
+      // maxRetries: 1 — otherwise the first (failing) notification retries
+      // and consumes the mock response queued for the second notification.
       const dtos: SendNotificationDto[] = [
         {
           tenantId: 't1',
@@ -244,6 +256,7 @@ describe('NotificationsService', () => {
           recipient: 'a@b.com',
           subject: 'first',
           body: 'b',
+          metadata: { maxRetries: 1 },
         },
         {
           tenantId: 't1',
@@ -251,6 +264,7 @@ describe('NotificationsService', () => {
           recipient: 'c@d.com',
           subject: 'second',
           body: 'b',
+          metadata: { maxRetries: 1 },
         },
       ];
 

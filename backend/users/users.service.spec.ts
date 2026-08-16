@@ -162,14 +162,14 @@ describe('UsersService', () => {
   // findByEmail()
   // -------------------------------------------------------------------
   describe('findByEmail', () => {
-    it('returns the user (no tenant scoping — email is globally unique)', async () => {
-      prisma.user.findUnique.mockResolvedValue({ id: 'u1', email: 'a@b.com' });
+    it('returns the user (no tenant scoping — searches across all tenants)', async () => {
+      prisma.user.findFirst.mockResolvedValue({ id: 'u1', email: 'a@b.com' });
       const result = await service.findByEmail('a@b.com');
       expect(result.id).toBe('u1');
     });
 
     it('returns null when not found', async () => {
-      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.user.findFirst.mockResolvedValue(null);
       const result = await service.findByEmail('nope@b.com');
       expect(result).toBeNull();
     });
@@ -180,7 +180,7 @@ describe('UsersService', () => {
   // -------------------------------------------------------------------
   describe('create', () => {
     it('creates a user with a hashed password and default role', async () => {
-      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.user.findFirst.mockResolvedValue(null);
       prisma.user.create.mockImplementation(async ({ data }: any) => ({
         id: 'u1',
         ...data,
@@ -210,7 +210,7 @@ describe('UsersService', () => {
     });
 
     it('creates a user with an explicit role (lowercased) and links the user_role row', async () => {
-      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.user.findFirst.mockResolvedValue(null);
       prisma.user.create.mockImplementation(async ({ data }: any) => ({
         id: 'u1',
         ...data,
@@ -242,7 +242,7 @@ describe('UsersService', () => {
     });
 
     it('throws ConflictException when the email is already taken', async () => {
-      prisma.user.findUnique.mockResolvedValue({ id: 'existing' });
+      prisma.user.findFirst.mockResolvedValue({ id: 'existing' });
 
       const dto: CreateUserDto = {
         email: 'taken@example.com',

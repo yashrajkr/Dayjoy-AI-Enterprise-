@@ -76,6 +76,7 @@
     "@types/cookie-parser": "^1.4.7",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.6",
+    "@types/multer": "^1.4.12",
     "@types/node": "^26.2.0",
     "@types/passport-jwt": "^4.0.1",
     "@types/supertest": "^7.2.1",

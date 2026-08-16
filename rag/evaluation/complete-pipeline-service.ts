@@ -3,6 +3,7 @@ import { RetrievalPipelineService } from '../retriever/retrieval-pipeline';
 import { PromptAssemblyService } from '../prompts/prompt-assembly-service';
 import { LLMGatewayService } from '../response-pipeline/llm-gateway-service';
 import { ResponseProcessingService } from '../response-pipeline/response-processing-service';
+import { ExtractedCitation } from '../response-pipeline/response-processing-config';
 
 @Injectable()
 export class RAGPipelineService {
@@ -52,6 +53,8 @@ export class RAGPipelineService {
           error: 'Retrieval failed',
           query,
           response: null,
+          retrieval: null,
+          llm: null,
           processingResult: null,
           totalLatencyMs: Date.now() - startTime,
         };
@@ -79,15 +82,11 @@ export class RAGPipelineService {
         },
       });
 
-      // Step 4: Process response
+      // Step 4: Process response (citation validation needs the actual
+      // retrieved chunks, not just the LLM-context metadata projection).
       const processedResponse = await this.responseProcessing.process(
         llmResponse.content,
-        retrievalResult.context?.metadata.map((meta, index) => ({
-          number: index + 1,
-          source: meta.source,
-          documentTitle: meta.documentTitle,
-          chunkIndex: meta.chunkIndex,
-        })),
+        retrievalResult.chunks,
       );
 
       const result: RAGPipelineResult = {
@@ -127,6 +126,8 @@ export class RAGPipelineService {
         error: error.message,
         query,
         response: null,
+        retrieval: null,
+        llm: null,
         processingResult: null,
         totalLatencyMs: Date.now() - startTime,
       };
@@ -230,13 +231,7 @@ export interface RAGPipelineResult {
   query: string;
   response: {
     content: string;
-    citations: Array<{
-      number: number;
-      sourceId: string;
-      documentTitle: string;
-      chunkIndex: number;
-      confidence: number;
-    }>;
+    citations: ExtractedCitation[];
     metadata: {
       wordCount: number;
       sentenceCount: number;

@@ -182,7 +182,7 @@ export class AuthService {
     }
 
     // 2. Check email is not taken.
-    const existing = await this.prisma.user.findUnique({
+    const existing = await this.prisma.user.findFirst({
       where: { email: dto.email },
       select: { id: true },
     });
@@ -303,7 +303,7 @@ export class AuthService {
     }
 
     // 3. Find user. Don't reveal whether the email exists.
-    const user = await this.prisma.user.findUnique({
+    const user = await this.prisma.user.findFirst({
       where: { email },
     });
 
@@ -553,7 +553,7 @@ export class AuthService {
    *  3. Queue the password-reset email notification (best-effort)
    */
   async requestPasswordReset(email: string) {
-    const user = await this.prisma.user.findUnique({
+    const user = await this.prisma.user.findFirst({
       where: { email },
       select: { id: true, tenantId: true, email: true, firstName: true },
     });

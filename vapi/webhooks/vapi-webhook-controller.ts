@@ -8,6 +8,7 @@ import {
   Req,
   Header,
   Logger,
+  RawBodyRequest,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { Public } from '../../backend/_shared/auth/public.decorator';
@@ -50,7 +51,7 @@ export class VapiWebhookController {
   @HttpCode(HttpStatus.OK)
   @Header('Content-Type', 'application/json')
   async handleWebhook(
-    @Req() req: Request,
+    @Req() req: RawBodyRequest<Request>,
     @Body() body: any,
     @Headers('x-vapi-signature') signature: string,
     @Headers('x-vapi-timestamp') timestamp: string,

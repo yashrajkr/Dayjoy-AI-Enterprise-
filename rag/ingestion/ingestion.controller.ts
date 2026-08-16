@@ -22,6 +22,7 @@ import { IngestionService } from './ingestion-service';
 import {
   IngestBatchDto,
   IngestDocumentDto,
+  RagSourceType,
 } from './ingestion.dto';
 
 /**
@@ -115,6 +116,7 @@ export class IngestionController {
 
     const dto: IngestDocumentDto = {
       title: body.title ?? file.originalname,
+      sourceType: RagSourceType.DOCUMENT,
       sourceName: body.sourceName,
       sourceId: body.sourceId,
       filename: file.originalname,

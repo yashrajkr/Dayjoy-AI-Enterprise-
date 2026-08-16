@@ -1,7 +1,10 @@
 import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../../backend/_shared/database/prisma.service';
 import { NotificationsService } from '../../backend/notifications/notifications.service';
-import { NotificationType } from '../../backend/notifications/dto/send-notification.dto';
+import {
+  NotificationType,
+  NotificationPriority,
+} from '../../backend/notifications/dto/send-notification.dto';
 import { getTransferPhoneNumber } from '../config/vapi-assistant-config';
 import type { VapiTool, ToolContext, ToolResult } from './vapi-tool-interface';
 
@@ -183,10 +186,10 @@ export class VapiHumanTransferTool implements VapiTool {
           type: NotificationType.IN_APP,
           priority:
             args?.priority === 'urgent'
-              ? 'URGENT'
+              ? NotificationPriority.URGENT
               : args?.priority === 'high'
-                ? 'HIGH'
-                : 'NORMAL',
+                ? NotificationPriority.HIGH
+                : NotificationPriority.NORMAL,
           subject,
           body,
           metadata: {

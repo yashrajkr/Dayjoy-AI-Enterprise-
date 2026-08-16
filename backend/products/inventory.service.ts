@@ -100,9 +100,11 @@ export class InventoryService {
     const where: any = { productId, tenantId: user.tenantId };
     if (query.reason) where.reason = query.reason;
 
-    const sortOrder = query.sortOrder ?? SortOrder.DESC;
-    const orderBy =
-      query.sortBy === 'createdAt' ? { createdAt: sortOrder } : { createdAt: 'desc' };
+    const sortOrder = (query.sortOrder ?? SortOrder.DESC) as Prisma.SortOrder;
+    const orderBy: Prisma.InventoryTransactionOrderByWithRelationInput =
+      query.sortBy === 'createdAt'
+        ? { createdAt: sortOrder }
+        : { createdAt: 'desc' };
 
     const [transactions, total] = await Promise.all([
       this.prisma.inventoryTransaction.findMany({
@@ -321,10 +323,20 @@ export class InventoryService {
     if (quantity <= 0) return;
 
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const inv = await tx.inventory.findUnique({ where: { productId } });
+      if (!inv || inv.tenantId !== tenantId) return null;
+
+      // Cap the reserved decrement at what's actually reserved (same
+      // idempotent-safety pattern as releaseStock above), while quantity
+      // is always deducted in full — the units are physically gone.
+      const releaseQty = Math.min(quantity, inv.reserved);
 
       const updated = await tx.inventory.update({
         where: { productId },
-        data: { quantity: newQuantity, reserved: newReserved },
+        data: {
+          quantity: { decrement: quantity },
+          reserved: { decrement: releaseQty },
+        },
       });
 
       await tx.inventoryTransaction.create({

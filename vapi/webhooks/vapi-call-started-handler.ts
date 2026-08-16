@@ -152,7 +152,10 @@ export class VapiCallStartedHandler {
       tenantId: session.tenantId,
       customerId,
       assistantIdVapi: normalized.assistantId,
-      direction: normalized.direction,
+      // normalize() always resolves this to 'INBOUND' | 'OUTBOUND' — the
+      // interface field is `string` because it also accepts Vapi's raw,
+      // less predictable payload shapes before normalization.
+      direction: normalized.direction as 'INBOUND' | 'OUTBOUND' | undefined,
       startedAt: session.startedAt.toISOString(),
     });
 

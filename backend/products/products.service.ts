@@ -248,7 +248,10 @@ export class ProductsService {
    */
   async update(id: string, user: AuthUser, dto: UpdateProductDto) {
     const product = await this.findOne(id, user);
-    const { sku: _sku, ...updates } = dto as any;
+    const { sku, ...updates } = dto as any;
+    if (sku !== undefined && sku !== product.sku) {
+      throw new BadRequestException('SKU cannot be changed after creation');
+    }
 
     const updated = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const result = await tx.product.update({

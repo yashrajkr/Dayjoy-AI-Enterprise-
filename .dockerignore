@@ -1,74 +1,43 @@
-# Git
-.git
-.gitignore
-.github
-.gitattributes
+# Keep the Docker build context small and deterministic.
+# NOTE: individual Dockerfiles COPY only the directories they need, so it is
+# safe to exclude everything below at the repo root regardless of which
+# service (backend/vapi/whatsapp-ai/admin-dashboard) is being built.
 
-# Dependencies
-node_modules
-pnpm-store
+node_modules/
+**/node_modules/
+.pnpm-store/
+dist/
+**/dist/
+build/
+.next/
+.nuxt/
+.turbo/
+.cache/
+coverage/
+*.tsbuildinfo
 
-# Build outputs
-dist
-.next
-out
-build
-coverage
-
-# Environment
-.env
-.env.local
-.env.*.local
-.env.production.template
-
-# Documentation
-*.md
-docs/
-_reference/
-ui-audit-reports/
-
-# IDE
-.vscode
-.idea
-*.swp
-*.swo
-.DS_Store
-
-# Monorepo tools
-.turbo
-.cache
-
-# Testing
-testing/
-test/
-*.test.ts
-*.spec.ts
-cypress/
-playwright/
-
-# Logs
-logs/
-*.log
-
-# Temporary
-tmp/
-temp/
-.turbopack
-
-# CI/CD
+.git/
 .github/
-deployment/scripts/
 
-# Configuration docs
-PRODUCTION_*.md
-BACKEND_DESIGN.md
-VOICE_AI_DESIGN.md
+.env
+.env.*
+!.env.example
+!.env.production.template
+
+*.log
+logs/
+
+apps/
+docs/
+testing/
+monitoring/
+deployment/kubernetes/
+_reference/
+agent-ctx/
+ui-audit-reports/
+automation/
+scripts/
+
+*.md
 *.pdf
 worklog.md
-CHANGES_UPDATED.md
-CHANGELOG.md
-INVENTORY_REPORT.txt
-
-# Analytics
-analytics/
-monitoring/

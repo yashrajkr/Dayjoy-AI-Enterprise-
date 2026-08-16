@@ -248,7 +248,7 @@ export class OrdersService {
       if (dto.distributorId) {
         const distributor = await tx.distributor.findUnique({
           where: { id: dto.distributorId },
-          select: { commissionRate: true, currency: true },
+          select: { commissionRate: true },
         });
         if (distributor && distributor.commissionRate) {
           const commissionAmount = +(

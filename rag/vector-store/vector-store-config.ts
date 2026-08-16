@@ -72,19 +72,22 @@ export interface SearchFilters {
   documentId?: string;
   sourceId?: string;
   documentType?: string;
-  
+  category?: string;
+
   // Content filters
   hasCode?: boolean;
   hasTable?: boolean;
   hasList?: boolean;
-  
+
   // Metadata filters
   heading?: string;
   minTokenCount?: number;
   maxTokenCount?: number;
-  
-  // Tenant isolation
-  tenantId: string;
+
+  // NOTE: tenant isolation is enforced separately via `SearchOptions.tenantId`
+  // (applied directly in the SQL WHERE clause) — this object is only ever
+  // used for the *additional* narrowing predicates in `buildFilterClauses`,
+  // which never reads a `tenantId` field off it.
 }
 
 /**
@@ -102,12 +105,17 @@ export interface SearchResult {
     totalChunks: number;
     heading?: string;
     headingLevel?: number;
+    section?: string;
+    sectionLevel?: number;
     documentTitle: string;
     documentType: string;
     tokenCount: number;
     hasCode: boolean;
     hasTable: boolean;
     hasList: boolean;
+    category?: string;
+    tags?: string[];
+    pageNumber?: number;
   };
 }
 
@@ -115,6 +123,7 @@ export interface SearchResult {
  * Search query
  */
 export interface SearchQuery {
+  tenantId: string;
   query: string;
   queryEmbedding: number[];
   filters?: SearchFilters;

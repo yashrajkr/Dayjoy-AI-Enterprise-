@@ -226,7 +226,7 @@ export class EmployeesService {
   // -------------------------------------------------------------------
 
   async create(dto: CreateEmployeeDto, currentUser: AuthenticatedUser) {
-    const existing = await this.prisma.user.findUnique({
+    const existing = await this.prisma.user.findFirst({
       where: { email: dto.email },
     });
     if (existing) {

@@ -2,6 +2,11 @@ import { Module } from '@nestjs/common';
 import { ResponsePipelineService } from './response-pipeline.service';
 import { LLMGatewayService } from './llm-gateway-service';
 import { ResponseProcessingService } from './response-processing-service';
+import { RetrievalService } from '../retriever/retrieval-service';
+import { EmbeddingsService } from '../embeddings/embeddings-service';
+import { VectorStoreService } from '../vector-store/vector-store-service';
+import { ContextBuilderService } from '../context-builder/context-builder.service';
+import { PromptAssemblyService } from '../prompts/prompt-assembly-service';
 
 /**
  * Response Pipeline module.
@@ -15,20 +20,27 @@ import { ResponseProcessingService } from './response-processing-service';
  *    hallucination detection, confidence scoring (moved from
  *    `rag/evaluation/`).
  *
- * Dependencies (`RetrievalService`, `ContextBuilderService`,
- * `PromptAssemblyService`) are provided at the `RagModule` level — NOT
- * re-declared here to avoid duplicate-provider conflicts when multiple
- * RAG sub-modules are composed together.
+ * `ResponsePipelineService` also needs `RetrievalService`,
+ * `ContextBuilderService` and `PromptAssemblyService` — these must be
+ * declared here too (registering them at the `RagModule` level only
+ * makes them injectable within `RagModule`'s own scope, not inside a
+ * separately-imported sub-module like this one). `RetrievalService`
+ * and `ContextBuilderService` in turn need `EmbeddingsService` /
+ * `VectorStoreService`, so those are declared here as well.
  *
- * The `OPENAI_CLIENT` token is `@Global()`-provided by `SharedAiModule`
- * (imported by `RagModule`), so {@link LLMGatewayService} can
- * `@Inject(OPENAI_CLIENT)` without an explicit module import here.
+ * `PrismaService` and the `OPENAI_CLIENT` token don't need to be
+ * re-declared — `PrismaModule` and `SharedAiModule` are both `@Global()`.
  */
 @Module({
   providers: [
     ResponsePipelineService,
     LLMGatewayService,
     ResponseProcessingService,
+    RetrievalService,
+    EmbeddingsService,
+    VectorStoreService,
+    ContextBuilderService,
+    PromptAssemblyService,
   ],
   exports: [
     ResponsePipelineService,

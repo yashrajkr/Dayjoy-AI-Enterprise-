@@ -243,7 +243,7 @@ export class ConversationsService {
           tenantId: user.tenantId!,
           topK: 5,
           similarityThreshold: 0.75,
-          userId: user.id,
+          userId: user.userId,
           userRole: (user as Record<string, unknown>).role as string | undefined,
         } as Parameters<RetrievalService['retrieve']>[0]);
         if (results && results.length > 0) {
@@ -274,10 +274,11 @@ export class ConversationsService {
       systemPrompt += `\n\n--- Dayjoy Knowledge Base (use this information to answer questions; always cite the source) ---\n${ragContext}\n--- End Knowledge Base ---\n\nIMPORTANT: Prioritize the knowledge base above over your own training data for Dayjoy-specific questions. If the knowledge base does not contain the answer, say "I don\'t have that information in our knowledge base" and offer to escalate to human support.`;
     }
 
-    const priorTurns = conversation.messages.map((m: { role: string; content: string }) => ({
-      role: m.role === 'user' ? 'user' : 'assistant',
-      content: m.content,
-    }));
+    const priorTurns: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
+      conversation.messages.map((m: { role: string; content: string }) => ({
+        role: m.role === 'user' ? ('user' as const) : ('assistant' as const),
+        content: m.content,
+      }));
 
     const chatMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
       [

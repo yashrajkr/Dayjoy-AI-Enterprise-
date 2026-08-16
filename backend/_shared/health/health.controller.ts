@@ -2,8 +2,9 @@ import { Controller, Get } from '@nestjs/common';
 import {
   HealthCheck,
   HealthCheckService,
+  HealthIndicatorResult,
+  HealthCheckError,
   PrismaHealthIndicator,
-  RedisHealthIndicator,
 } from '@nestjs/terminus';
 import { PrismaService } from '../database/prisma.service';
 import { InjectRedis } from '../security/redis.decorators';
@@ -27,10 +28,26 @@ export class HealthController {
   constructor(
     private readonly health: HealthCheckService,
     private readonly prismaIndicator: PrismaHealthIndicator,
-    private readonly redisIndicator: RedisHealthIndicator,
     private readonly prisma: PrismaService,
     @InjectRedis() private readonly redis: Redis,
   ) {}
+
+  /**
+   * @nestjs/terminus has no built-in Redis indicator, so this pings the
+   * injected ioredis client directly in the same
+   * `{ [key]: { status, ... } }` shape Terminus indicators return.
+   */
+  private async pingRedis(key: string): Promise<HealthIndicatorResult> {
+    try {
+      await this.redis.ping();
+      return { [key]: { status: 'up' } };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new HealthCheckError('Redis check failed', {
+        [key]: { status: 'down', message },
+      });
+    }
+  }
 
   @Get('live')
   @HealthCheck()
@@ -51,7 +68,7 @@ export class HealthController {
   readiness() {
     return this.health.check([
       async () => this.prismaIndicator.pingCheck('database', this.prisma),
-      async () => this.redisIndicator.pingCheck('redis', this.redis),
+      async () => this.pingRedis('redis'),
     ]);
   }
 
