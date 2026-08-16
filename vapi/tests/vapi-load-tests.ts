@@ -50,7 +50,7 @@ function makePrismaMock() {
     create: vi.fn().mockResolvedValue({ id: 'we-1' }),
     update: vi.fn().mockResolvedValue(undefined),
   };
-  prisma.analyticsEvent = { findMany: vi.fn(), count: vi.fn(), create: vi.fn() };
+  prisma.analyticsEvent = { findMany: vi.fn(), count: vi.fn(), create: vi.fn().mockResolvedValue({}) };
   return prisma;
 }
 
@@ -132,9 +132,14 @@ describe('VapiLoad', () => {
           latencyMs: 10,
         }),
       };
+      // Constructor order is (prisma, sessionMemory, memoryService,
+      // toolRegistry) — a stub in the memoryService slot is enough
+      // since buildMemoryContext() failures are caught + logged as a
+      // non-fatal warning by the handler.
       functionCallHandler = new VapiFunctionCallHandler(
         prisma,
         sessionMemory,
+        { buildMemoryContext: vi.fn().mockResolvedValue({ summary: '' }) } as any,
         toolRegistry,
       );
     });

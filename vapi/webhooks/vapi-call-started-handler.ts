@@ -34,6 +34,8 @@ export interface VapiCallStartedInput {
   tenantId?: string;
   startedAt?: string | number;
   metadata?: Record<string, any>;
+  /** Real Vapi Call object shape: the caller's number lives here, not on a top-level `from`. */
+  customer?: { number?: string };
 }
 
 export interface VapiCallStartedResult {
@@ -248,13 +250,16 @@ export class VapiCallStartedHandler {
       (call.type === 'outbound' || call.type === 'outbound-phone'
         ? 'OUTBOUND'
         : 'INBOUND');
+    // Real Vapi Call objects put the caller's number under
+    // `customer.number`, not a top-level `from`/`phoneNumber` field.
+    const from = call.from ?? call.phoneNumber ?? call.customer?.number;
     return {
       id: call.id,
       type: call.type,
       direction,
-      from: call.from ?? call.phoneNumber,
+      from,
       to: call.to,
-      phoneNumber: call.phoneNumber ?? call.from,
+      phoneNumber: call.phoneNumber ?? from,
       assistantId: call.assistantId ?? call.agentId,
       agentId: call.agentId ?? call.assistantId,
       tenantId: call.tenantId,

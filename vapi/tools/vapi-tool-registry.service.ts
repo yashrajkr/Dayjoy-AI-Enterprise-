@@ -70,6 +70,25 @@ export class VapiToolRegistry {
   }
 
   /**
+   * Whether a tool with this name is registered. Satisfies the
+   * `IVapiToolRegistry` contract that `VapiFunctionCallHandler`
+   * (`vapi/webhooks/vapi-function-call-handler.ts`) depends on via the
+   * `VAPI_TOOL_REGISTRY` DI token — see `vapi/tools/vapi-tools.module.ts`
+   * for the binding.
+   */
+  has(name: string): boolean {
+    return this.tools.has(name);
+  }
+
+  /**
+   * Array of registered tool names. Satisfies the `IVapiToolRegistry`
+   * contract (see {@link has}).
+   */
+  list(): string[] {
+    return Array.from(this.tools.keys());
+  }
+
+  /**
    * Run a tool by name. Always returns a `ToolResult` — if the tool
    * throws, the error is captured into `{ success: false, error }`.
    */

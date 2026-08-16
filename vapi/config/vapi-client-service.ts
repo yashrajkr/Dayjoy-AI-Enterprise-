@@ -222,18 +222,32 @@ export class VapiClientService implements OnModuleInit {
     metadata?: Record<string, any>;
   }): Promise<VapiCall> {
     const { phoneNumber, assistantId, customer, metadata } = params;
+    // `phoneNumberId` identifies the Vapi-owned *sending* number
+    // (VAPI_PHONE_NUMBER_ID) — it is NOT the destination number being
+    // dialed. The previous implementation passed the destination
+    // number's raw string into `phoneNumberId`, which the Vapi API
+    // would reject (or silently route from an unintended number, if it
+    // happened to resolve). The destination goes in `customer.number`.
+    const phoneNumberId = process.env.VAPI_PHONE_NUMBER_ID;
+    if (!phoneNumberId) {
+      throw new Error(
+        'VAPI_PHONE_NUMBER_ID is not set — cannot place an outbound call without ' +
+          'knowing which Vapi-registered number to call from. Set it to the phone ' +
+          'number ID shown in the Vapi dashboard for the number Dayjoy calls out from.',
+      );
+    }
     return this.withRetry('createCall', async () => {
       const res: any = await this.client!.calls.create({
-        phoneNumberId: phoneNumber,
+        phoneNumberId,
         assistantId: assistantId ?? this.config.assistantId,
-        customer,
+        customer: { number: phoneNumber, ...customer },
         metadata: {
           ...metadata,
           source: 'dayjoy-voice-ai',
         },
       } as any);
 
-      this.logger.log(`Created Vapi call ${res.id} → ${phoneNumber}`);
+      this.logger.log(`Created Vapi call ${res.id} → ${phoneNumber} (from phoneNumberId=${phoneNumberId})`);
       return this.normaliseCall(res);
     });
   }
@@ -246,18 +260,44 @@ export class VapiClientService implements OnModuleInit {
   }
 
   /**
-   * The installed `@vapi-ai/server-sdk` REST client has no hangup/end
-   * endpoint (only list/create/get/update/delete on `calls`) — ending a
-   * live call requires the real-time call-control channel, which is out
-   * of scope here. Kept as an explicit, typed failure rather than
-   * silently no-op'ing or misusing `delete` (which removes call records,
-   * not live calls).
+   * End a live call via Vapi's live call-control channel.
+   *
+   * The `@vapi-ai/server-sdk`'s `calls` resource has no hangup/end
+   * endpoint — ending an in-progress call is done out-of-band, by
+   * POSTing `{ "type": "end-call" }` to the call's `monitor.controlUrl`
+   * (see docs.vapi.ai/calls/call-features). `controlUrl` is only
+   * populated on the `Call` object while the call is active — we fetch
+   * it fresh via `calls.get()` rather than caching it from
+   * `createCall()`'s response, since inbound calls (the majority of
+   * Dayjoy's traffic) never go through `createCall()` at all.
    */
   async endCall(callId: string): Promise<void> {
-    throw new Error(
-      `endCall(${callId}) is not supported by @vapi-ai/server-sdk's REST client — ` +
-        'ending a live call requires Vapi call-control (out of scope for this integration).',
+    if (!this.enabled || !this.client) {
+      throw new Error(
+        `Vapi client is not enabled (VAPI_API_KEY missing or init failed) — endCall(${callId}) aborted.`,
+      );
+    }
+    const call: any = await this.withRetry('getCallForEndCall', () =>
+      this.client!.calls.get({ id: callId }),
     );
+    const controlUrl: string | undefined = call?.monitor?.controlUrl;
+    if (!controlUrl) {
+      throw new Error(
+        `Call ${callId} has no monitor.controlUrl — it may have already ended, ` +
+          'or Vapi has not attached live-call-control yet.',
+      );
+    }
+    const res = await fetch(controlUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'end-call' }),
+    });
+    if (!res.ok) {
+      throw new Error(
+        `Failed to end call ${callId} via control URL: ${res.status} ${res.statusText}`,
+      );
+    }
+    this.logger.log(`Ended call ${callId} via live call control`);
   }
 
   async listCalls(limit = 100): Promise<VapiCall[]> {

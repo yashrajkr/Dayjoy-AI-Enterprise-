@@ -5,7 +5,7 @@ import {
   NotificationType,
   NotificationPriority,
 } from '../../backend/notifications/dto/send-notification.dto';
-import { getTransferPhoneNumber } from '../config/vapi-assistant-config';
+import { getDepartmentTransferPhoneNumber } from '../config/vapi-assistant-config';
 import type { VapiTool, ToolContext, ToolResult } from './vapi-tool-interface';
 
 /**
@@ -239,12 +239,14 @@ export class VapiHumanTransferTool implements VapiTool {
         `human_transfer complete → ${department} (session=${voiceSession?.id ?? 'none'})`,
       );
 
-      // Resolve the destination phone number from env so Vapi can
-      // perform the actual SIP transfer. When unset, the tool still
-      // records the intent (notification + audit row) but the caller
-      // is NOT transferred — the operator must set
+      // Resolve the destination phone number for THIS department from
+      // env (VAPI_TRANSFER_PHONE_NUMBER_<DEPARTMENT>, falling back to
+      // the single default) so Vapi can perform the actual SIP
+      // transfer. When unset entirely, the tool still records the
+      // intent (notification + audit row) but the caller is NOT
+      // transferred — the operator must set at least
       // `VAPI_TRANSFER_PHONE_NUMBER` for transfers to take effect.
-      const forwardingPhoneNumber = getTransferPhoneNumber();
+      const forwardingPhoneNumber = getDepartmentTransferPhoneNumber(department);
 
       return {
         success: true,

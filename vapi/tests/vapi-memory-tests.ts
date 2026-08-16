@@ -238,7 +238,7 @@ describe('VapiMemory', () => {
 
       await profile.getProfile('cust-2');
 
-      const cached = redis.store.get('vapi:customer-profile:cust-2');
+      const cached = redis.store.get('vapi:customer:cust-2:profile');
       expect(cached).toBeDefined();
       const parsed = JSON.parse(cached!);
       expect(parsed.firstName).toBe('Jane');
@@ -247,7 +247,7 @@ describe('VapiMemory', () => {
     it('returns the cached profile on a cache hit without hitting the DB', async () => {
       // Seed the cache directly.
       redis.store.set(
-        'vapi:customer-profile:cust-3',
+        'vapi:customer:cust-3:profile',
         JSON.stringify({
           id: 'cust-3',
           tenantId: 't1',

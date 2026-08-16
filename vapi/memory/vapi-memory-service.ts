@@ -273,6 +273,22 @@ export class VapiMemoryService {
       parts.push(`Last user message: "${session.lastUserMessage.slice(0, 200)}".`);
     }
 
+    // `escalationTriggered` is set by VapiTranscriptHandler's
+    // keyword-based detector on final user turns, but nothing
+    // previously read it during the live call — it only reached
+    // VoiceAnalytics after the call ended (post-hoc reporting, too
+    // late to change behavior). Surfacing it here means every
+    // subsequent tool call's memoryContext carries an explicit signal,
+    // so the assistant's LLM (which reads `result.memoryContext` per
+    // vapi-function-call-handler.ts) is nudged toward calling
+    // `human_transfer` even if it didn't independently conclude the
+    // conversation needs escalating.
+    if (session.escalationTriggered) {
+      parts.push(
+        'ESCALATION SIGNAL: the caller used language suggesting they want a human agent or are frustrated. Strongly consider calling human_transfer now if you have not already.',
+      );
+    }
+
     if (recentMessages.length > 0) {
       parts.push(
         `Conversation has ${recentMessages.length} prior message(s) on record.`,

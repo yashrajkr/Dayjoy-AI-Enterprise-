@@ -53,6 +53,8 @@ function makePrismaMock() {
   prisma.voiceAnalytics = {
     findUnique: vi.fn(),
     findMany: vi.fn(),
+    create: vi.fn().mockResolvedValue({ id: 'va-1' }),
+    update: vi.fn().mockResolvedValue({ id: 'va-1' }),
     upsert: vi.fn(),
     aggregate: vi.fn(),
     count: vi.fn(),
@@ -62,7 +64,7 @@ function makePrismaMock() {
     create: vi.fn().mockResolvedValue({ id: 'we-1' }),
     update: vi.fn().mockResolvedValue(undefined),
   };
-  prisma.analyticsEvent = { findMany: vi.fn(), count: vi.fn(), create: vi.fn() };
+  prisma.analyticsEvent = { findMany: vi.fn(), count: vi.fn(), create: vi.fn().mockResolvedValue({}) };
   return prisma;
 }
 
@@ -120,9 +122,14 @@ describe('Vapi E2E', () => {
     );
     transcriptHandler = new VapiTranscriptHandler(prisma, sessionMemory);
     toolRegistry = makeToolRegistryStub();
+    // Constructor order is (prisma, sessionMemory, memoryService,
+    // toolRegistry) — a stub in the memoryService slot is enough since
+    // buildMemoryContext() is only used to enrich the response and its
+    // failure is caught + logged as a non-fatal warning by the handler.
     functionCallHandler = new VapiFunctionCallHandler(
       prisma,
       sessionMemory,
+      { buildMemoryContext: vi.fn().mockResolvedValue({ summary: '' }) } as any,
       toolRegistry,
     );
   });
@@ -147,6 +154,7 @@ describe('Vapi E2E', () => {
       conversationId: null,
     });
     prisma.conversation.create.mockResolvedValue({ id: 'conv-1' });
+    prisma.conversation.update.mockResolvedValue({ id: 'conv-1', status: 'ENDED' });
     prisma.voiceSession.update.mockResolvedValue({ id: 'sess-e2e-1' });
 
     const started = await callStartedHandler.handle({
@@ -216,7 +224,11 @@ describe('Vapi E2E', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           sessionId: 'sess-e2e-1',
-          role: 'user',
+          // The Prisma `TranscriptRole` enum is uppercase
+          // (USER/ASSISTANT/SYSTEM/TOOL) — normalizeRole() in
+          // VapiTranscriptHandler maps the incoming lowercase Vapi
+          // `role` to match.
+          role: 'USER',
           content: 'What is your return policy?',
         }),
       }),

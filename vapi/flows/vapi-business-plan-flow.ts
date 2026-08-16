@@ -4,6 +4,8 @@ import {
   FlowContext,
   FlowResponse,
   VapiFlow,
+  isEscalationRequest,
+  buildMidFlowEscalationResponse,
 } from './vapi-flow-types';
 
 /**
@@ -25,6 +27,10 @@ export class VapiBusinessPlanFlow implements VapiFlow {
   private readonly logger = new Logger(VapiBusinessPlanFlow.name);
 
   async execute(context: FlowContext): Promise<FlowResponse> {
+    if (isEscalationRequest(context.userMessage)) {
+      return buildMidFlowEscalationResponse(context, 'business_development');
+    }
+
     const step = context.flowState?.step ?? 'explain';
     this.logger.debug(`business_plan step=${step} session=${context.sessionId}`);
 

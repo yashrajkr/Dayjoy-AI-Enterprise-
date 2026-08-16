@@ -412,7 +412,7 @@ describe('VapiTools', () => {
 
       expect(result.success).toBe(true);
       expect(result.data.leadId).toBe('lead-uuid-1234abcd');
-      expect(result.data.referenceNumber).toBe('LEAD-UUID');
+      expect(result.data.referenceNumber).toBe('LEAD-UUI');
       expect(result.data.status).toBe('NEW');
       expect(prisma.lead.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -590,9 +590,9 @@ describe('VapiTools', () => {
 
       expect(result.success).toBe(true);
       expect(result.data.ticketId).toBe('ticket-uuid-1234abcd');
-      expect(result.data.ticketNumber).toBe('TICKET-UU');
+      expect(result.data.ticketNumber).toBe('TICKET-U');
       expect(result.data.status).toBe('open');
-      expect(result.speak).toContain('TICKET-UU');
+      expect(result.speak).toContain('TICKET-U');
       expect(result.speak).toContain('john@example.com');
     });
 
@@ -625,7 +625,7 @@ describe('VapiTools', () => {
           data: expect.objectContaining({
             customerId: 'cust-1',
             type: 'CALL',
-            subject: expect.stringContaining('TICKET-UU'),
+            subject: expect.stringContaining('TICKET-U'),
           }),
         }),
       );

@@ -54,6 +54,37 @@ export function getForwardingPhoneNumbers(): string[] | undefined {
 }
 
 /**
+ * Per-department transfer number env vars. Each is optional — when a
+ * department has no dedicated number configured, `getDepartmentTransferPhoneNumber`
+ * falls back to the single default (`VAPI_TRANSFER_PHONE_NUMBER`).
+ */
+const DEPARTMENT_ENV_VARS: Record<string, string> = {
+  customer_service: 'VAPI_TRANSFER_PHONE_NUMBER_CUSTOMER_SERVICE',
+  business_development: 'VAPI_TRANSFER_PHONE_NUMBER_BUSINESS_DEVELOPMENT',
+  technical_support: 'VAPI_TRANSFER_PHONE_NUMBER_TECHNICAL_SUPPORT',
+  manager: 'VAPI_TRANSFER_PHONE_NUMBER_MANAGER',
+  sales: 'VAPI_TRANSFER_PHONE_NUMBER_SALES',
+};
+
+/**
+ * Resolve the transfer destination for a specific department.
+ *
+ * Previously `human_transfer` always forwarded to the same single
+ * number/list regardless of which department the LLM selected — the
+ * `department` argument only affected the notification's display text,
+ * not where the call was actually routed. This reads a per-department
+ * env var first (`VAPI_TRANSFER_PHONE_NUMBER_<DEPARTMENT>`), falling
+ * back to the single default so existing single-number deployments
+ * keep working unchanged.
+ */
+export function getDepartmentTransferPhoneNumber(department: string): string | undefined {
+  const envVar = DEPARTMENT_ENV_VARS[department];
+  const raw = envVar ? process.env[envVar] : undefined;
+  if (raw && raw.trim()) return raw.trim();
+  return getTransferPhoneNumber();
+}
+
+/**
  * Legacy assistant config shape. Kept for backward compat with the
  * scaffold's docs + deployment checklist. The runtime config is
  * `VAPI_ASSISTANT_CONFIG` below.
@@ -142,6 +173,42 @@ export const VAPI_ASSISTANT_CONFIG: Record<string, any> = {
   backgroundSound: DEFAULT_VAPI_CONFIG.voiceAgent.backgroundSound,
   backchannelingEnabled: DEFAULT_VAPI_CONFIG.voiceAgent.backchannelingEnabled,
   backgroundSoundLevel: DEFAULT_VAPI_CONFIG.voiceAgent.backgroundSoundLevel,
+
+  // Per-assistant server URL: previously unset, which meant webhook
+  // delivery depended entirely on the dashboard-level "Server URL"
+  // setting (not visible/auditable from code). Setting it explicitly on
+  // the assistant makes the assistant self-contained and independent of
+  // that out-of-band dashboard config. `server.secret` is Vapi's default
+  // webhook-auth mechanism: Vapi echoes this value verbatim in the
+  // `X-Vapi-Secret` header on every request (a plain shared-secret
+  // comparison, not HMAC) — `VapiWebhookService.verifySharedSecret()`
+  // checks it against the same `VAPI_WEBHOOK_SECRET`.
+  //
+  // `serverMessages` restricts which event types Vapi actually POSTs to
+  // this URL, limited to the ones the webhook handlers implement (see
+  // `vapi/webhooks/vapi-webhook-service.ts`). Vapi's default is "send
+  // everything" — without this allowlist the server would also receive
+  // (and have to no-op) `conversation-update`, `speech-update`, and
+  // other high-frequency events this integration doesn't act on.
+  ...(DEFAULT_VAPI_CONFIG.webhook.url
+    ? {
+        serverUrl: DEFAULT_VAPI_CONFIG.webhook.url,
+        server: {
+          url: DEFAULT_VAPI_CONFIG.webhook.url,
+          ...(DEFAULT_VAPI_CONFIG.webhook.secret
+            ? { secret: DEFAULT_VAPI_CONFIG.webhook.secret }
+            : {}),
+          timeoutSeconds: 20,
+        },
+        serverMessages: [
+          'status-update',
+          'transcript',
+          'tool-calls',
+          'end-of-call-report',
+          'hang',
+        ],
+      }
+    : {}),
 
   // When `VAPI_TRANSFER_PHONE_NUMBER` (or `VAPI_TRANSFER_PHONE_NUMBERS`)
   // is set, the assistant is wired to perform a real SIP transfer to the

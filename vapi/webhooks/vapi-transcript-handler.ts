@@ -14,6 +14,8 @@ export interface VapiTranscriptMessage {
   text?: string;
   timestamp?: string | number;
   isFinal?: boolean;
+  /** Real Vapi field: 'partial' | 'final'. Preferred over `isFinal` when present. */
+  transcriptType?: 'partial' | 'final';
   confidence?: number;
   tokensUsed?: number;
   metadata?: Record<string, any>;
@@ -76,7 +78,9 @@ export class VapiTranscriptHandler {
     }
 
     const role = this.normalizeRole(message.role ?? 'user');
-    const isFinal = message.isFinal !== false;
+    const isFinal = message.transcriptType
+      ? message.transcriptType === 'final'
+      : message.isFinal !== false;
     const ts = message.timestamp
       ? new Date(message.timestamp)
       : new Date();
