@@ -415,7 +415,7 @@ export class AuthService {
     try {
       decoded = this.jwtService.verify<
         JwtPayload & { jti?: string; exp?: number }
-      >(dto.refreshToken);
+      >(dto.refreshToken, { secret: this.jwtSecret });
     } catch {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
@@ -853,9 +853,11 @@ export class AuthService {
     };
 
     const accessToken = this.jwtService.sign(payload, {
+      secret: this.jwtSecret,
       expiresIn: this.jwtExpiresIn,
     });
     const refreshToken = this.jwtService.sign(payload, {
+      secret: this.jwtSecret,
       expiresIn: this.refreshExpiresIn,
     });
 

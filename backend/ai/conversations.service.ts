@@ -33,6 +33,22 @@ const LLM_CONTEXT_WINDOW = 10;
 const ONE_CONVERSATION_MESSAGE_TAKE = 50;
 
 /**
+ * `Prisma.ConversationInclude['user']` shape that excludes `passwordHash`.
+ * `include: { user: true }` was pulling the full `User` row — including the
+ * bcrypt hash — into every conversation list/detail/create response.
+ */
+const SAFE_USER_SELECT = {
+  select: {
+    id: true,
+    email: true,
+    firstName: true,
+    lastName: true,
+    role: true,
+    status: true,
+  },
+} as const;
+
+/**
  * Conversations service.
  *
  * `sendMessage()` is the core chat endpoint: it persists the user's
@@ -84,7 +100,7 @@ export class ConversationsService {
         include: {
           agent: true,
           customer: true,
-          user: true,
+          user: SAFE_USER_SELECT,
           _count: { select: { messages: true } },
         },
       }),
@@ -103,7 +119,7 @@ export class ConversationsService {
       include: {
         agent: true,
         customer: true,
-        user: true,
+        user: SAFE_USER_SELECT,
         messages: {
           orderBy: { createdAt: 'asc' },
           take: ONE_CONVERSATION_MESSAGE_TAKE,
@@ -146,7 +162,7 @@ export class ConversationsService {
         status: 'active',
         context,
       },
-      include: { agent: true, customer: true, user: true },
+      include: { agent: true, customer: true, user: SAFE_USER_SELECT },
     });
   }
 

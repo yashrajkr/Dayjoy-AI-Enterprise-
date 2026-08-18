@@ -98,7 +98,7 @@ export function mapPrismaErrorToHttp(error: PrismaClientKnownRequestError): {
         status: HttpStatus.INTERNAL_SERVER_ERROR,
         code: 'INTERNAL_ERROR',
         message: 'Database operation failed',
-        details: { prismaCode: error.code },
+        details: { prismaCode: error.code, ...(error.meta ?? {}) },
       };
   }
 }
