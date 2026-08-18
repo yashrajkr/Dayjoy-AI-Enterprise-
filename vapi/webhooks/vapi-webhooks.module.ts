@@ -1,4 +1,4 @@
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { VapiWebhookController } from './vapi-webhook-controller';
 import { VapiWebhookService } from './vapi-webhook-service';
 import { VapiCallStartedHandler } from './vapi-call-started-handler';
@@ -19,17 +19,24 @@ import { VapiToolsModule } from '../tools/vapi-tools.module';
  * {@link VapiToolsModule} — required so the `VAPI_TOOL_REGISTRY`
  * token it exports (bound to `VapiToolRegistry` via `useExisting`)
  * is visible to `VapiFunctionCallHandler`'s
- * `@Optional() @Inject(VAPI_TOOL_REGISTRY)`. This import was
- * previously missing: the handler's `@Optional()` decorator let DI
- * silently resolve the token to `undefined` instead of failing
- * loudly at bootstrap, so every tool call failed closed with
- * `TOOL_REGISTRY_UNAVAILABLE` with no startup signal that anything
- * was wrong. `forwardRef` breaks the cycle since `VapiToolsModule`
- * doesn't import this module back, but both ultimately sit under the
- * shared `PrismaModule`/`SharedAiModule` globals.
+ * `@Optional() @Inject(VAPI_TOOL_REGISTRY)`.
+ *
+ * No `forwardRef` here: `VapiToolsModule` only references this
+ * module's `VAPI_TOOL_REGISTRY` *token* (a plain TS/JS import of a
+ * `Symbol`, not a Nest module import), so there's no real module-level
+ * cycle. A previous `forwardRef(() => VapiToolsModule)` here — despite
+ * being unnecessary — perturbed the tool providers' construction
+ * timing enough that 5 of `VapiToolRegistry`'s 8 constructor-injected
+ * tools (the ones depending on a backend feature-module service
+ * rather than plain `PrismaService`) resolved as `undefined` on this
+ * import path specifically, so they silently never registered even
+ * though a separately-constructed registry (used to sync tool
+ * definitions to the live Vapi assistant) had all 8. Every live tool
+ * call routed through this module's `VapiFunctionCallHandler` failed
+ * with `TOOL_NOT_FOUND` for exactly those 5 tools.
  */
 @Module({
-  imports: [VapiMemoryModule, VapiAnalyticsModule, forwardRef(() => VapiToolsModule)],
+  imports: [VapiMemoryModule, VapiAnalyticsModule, VapiToolsModule],
   controllers: [VapiWebhookController],
   providers: [
     VapiWebhookService,

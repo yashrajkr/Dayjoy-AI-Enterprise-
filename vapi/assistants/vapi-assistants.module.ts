@@ -1,4 +1,4 @@
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { PrismaModule } from '../../backend/_shared/database/prisma.module';
 import { VapiConfigModule } from '../config/vapi-config.module';
 import { VapiToolsModule } from '../tools/vapi-tools.module';
@@ -14,16 +14,18 @@ import { VapiAssistantController } from './vapi-assistant.controller';
  *                         the assistant's tool list)
  *   - PrismaModule      → global, imported for explicitness
  *
- * `forwardRef(VapiToolsModule)` because VapiToolsModule transitively
- * imports KnowledgeModule which transitively imports SharedAiModule —
- * a clean DAG, but we use forwardRef defensively to avoid any
- * import-ordering surprises during NestJS bootstrap.
+ * No `forwardRef` on `VapiToolsModule`: it's a clean DAG (Knowledge/
+ * Products/Customers/Distributors/Notifications have no back-reference
+ * to `vapi/`) — a previous defensive `forwardRef` here was unnecessary
+ * and, combined with the same pattern elsewhere, caused 5 of
+ * `VapiToolRegistry`'s 8 tools to silently fail to register depending
+ * on which import path constructed the registry first.
  */
 @Module({
   imports: [
     PrismaModule,
     VapiConfigModule,
-    forwardRef(() => VapiToolsModule),
+    VapiToolsModule,
   ],
   controllers: [VapiAssistantController],
   providers: [VapiAssistantService],
