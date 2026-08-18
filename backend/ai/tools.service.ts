@@ -435,6 +435,7 @@ export class ToolsService {
     const ticket = await this.prisma.supportTicket.create({
       data: {
         tenantId: user?.tenantId ?? args.tenantId,
+        ticketNumber: `T${Date.now().toString(36).toUpperCase()}`,
         subject: args.subject,
         description: args.description,
         priority: args.priority ?? 'medium',
@@ -490,6 +491,7 @@ export class ToolsService {
     const ticket = await this.prisma.supportTicket.create({
       data: {
         tenantId: conversation.tenantId,
+        ticketNumber: `T${Date.now().toString(36).toUpperCase()}`,
         subject: `Human transfer — conversation ${conversation.id}`,
         description:
           args.reason ||
