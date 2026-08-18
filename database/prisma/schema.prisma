@@ -1665,7 +1665,7 @@ model SupportTicket {
   customer     Customer? @relation(fields: [customerId], references: [id])
   customerId   String?   @map("customer_id")
   assignedTo   User?     @relation(fields: [assignedToId], references: [id])
-  assignedToId String?   @map("assigned_to_id")
+  assignedToId String?   @map("assigned_to")
   subject      String
   description  String    @db.Text
   priority     String    @default("medium") // low, medium, high, urgent
@@ -1692,7 +1692,7 @@ model Appointment {
   distributor     Distributor? @relation(fields: [distributorId], references: [id])
   distributorId   String?      @map("distributor_id")
   assignedTo      User?        @relation(fields: [assignedToId], references: [id])
-  assignedToId    String?      @map("assigned_to_id")
+  assignedToId    String?      @map("assigned_to")
   title           String
   description     String?
   scheduledAt     DateTime     @map("scheduled_at")
