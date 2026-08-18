@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../backend/_shared/database/prisma.service';
 import { NotificationsService } from '../../backend/notifications/notifications.service';
 import {
@@ -97,7 +97,6 @@ export class VapiHumanTransferTool implements VapiTool {
 
   constructor(
     private readonly prisma: PrismaService,
-    @Inject(forwardRef(() => NotificationsService))
     private readonly notificationsService: NotificationsService,
   ) {}
 

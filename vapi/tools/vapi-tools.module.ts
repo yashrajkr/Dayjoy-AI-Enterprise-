@@ -1,4 +1,4 @@
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { PrismaModule } from '../../backend/_shared/database/prisma.module';
 import { SharedAiModule } from '../../backend/_shared/ai/ai.module';
 import { KnowledgeModule } from '../../backend/knowledge/knowledge.module';
@@ -34,19 +34,33 @@ import { VAPI_TOOL_REGISTRY } from '../webhooks/vapi-function-call-handler';
  * to be imported here, but we import them anyway for explicitness (and
  * to make the dependency graph obvious when reading this file).
  *
- * `forwardRef` is used on the imports because the backend modules
- * transitively import SharedAiModule (global) and PrismaModule (global)
- * — circular import warnings would otherwise fire at bootstrap.
+ * None of the 5 backend modules import anything from `vapi/`, so
+ * they're imported directly (no `forwardRef`) — see the `imports`
+ * array below for why that matters.
  */
 @Module({
   imports: [
     PrismaModule,
     SharedAiModule,
-    forwardRef(() => KnowledgeModule),
-    forwardRef(() => ProductsModule),
-    forwardRef(() => CustomersModule),
-    forwardRef(() => DistributorsModule),
-    forwardRef(() => NotificationsModule),
+    // No forwardRef here: none of these 5 backend modules import
+    // anything from `vapi/` (verified — Knowledge/Products/Customers/
+    // Distributors/Notifications have zero back-references), so there
+    // is no real circular dependency. The previous defensive
+    // `forwardRef()` wrapping (module-level here + per-tool
+    // `@Inject(forwardRef(...))`) introduced a real bug: it changed
+    // these 5 tools' constructor-injection timing enough that
+    // `VapiToolRegistry` silently registered only the 3 tools that
+    // inject plain `PrismaService` (create_lead, book_appointment,
+    // create_support_ticket) while search_knowledge, search_products,
+    // customer_lookup, distributor_lookup, and human_transfer never
+    // made it into the registry — every live call to those 5 tools
+    // failed with TOOL_NOT_FOUND despite the assistant having them
+    // correctly configured on the Vapi side.
+    KnowledgeModule,
+    ProductsModule,
+    CustomersModule,
+    DistributorsModule,
+    NotificationsModule,
   ],
   providers: [
     VapiToolRegistry,

@@ -664,7 +664,7 @@ model Lead {
   tenantId     String     @map("tenant_id")
   sourceId     String?    @map("source_id")
   assignedTo   User?      @relation(fields: [assignedToId], references: [id])
-  assignedToId String?    @map("assigned_to_id")
+  assignedToId String?    @map("assigned_to")
   firstName    String?    @map("first_name")
   lastName     String?    @map("last_name")
   email        String?

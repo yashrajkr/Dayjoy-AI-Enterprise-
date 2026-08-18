@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { CustomersService } from '../../backend/customers/customers.service';
 import type { VapiTool, ToolContext, ToolResult } from './vapi-tool-interface';
 
@@ -41,10 +41,7 @@ export class VapiCustomerLookupTool implements VapiTool {
 
   private readonly logger = new Logger(VapiCustomerLookupTool.name);
 
-  constructor(
-    @Inject(forwardRef(() => CustomersService))
-    private readonly customersService: CustomersService,
-  ) {}
+  constructor(private readonly customersService: CustomersService) {}
 
   async execute(
     args: { phoneNumber?: string; email?: string },

@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { KnowledgeService } from '../../backend/knowledge/knowledge.service';
 import type { VapiTool, ToolContext, ToolResult } from './vapi-tool-interface';
 
@@ -6,9 +6,8 @@ import type { VapiTool, ToolContext, ToolResult } from './vapi-tool-interface';
  * VapiSearchKnowledgeTool — search the Dayjoy knowledge base via the
  * real `KnowledgeService.query()` (RAG pipeline).
  *
- * The `KnowledgeService` lives in `backend/knowledge/` and is imported
- * via `forwardRef` to avoid a circular DI dependency (the AI module
- * imports Knowledge, the Vapi tools module will also import it).
+ * The `KnowledgeService` lives in `backend/knowledge/`, which has no
+ * back-reference to `vapi/` — a plain constructor injection is enough.
  *
  * The tool returns:
  *   - `data.answer` — the RAG-synthesised answer.
@@ -48,10 +47,7 @@ export class VapiSearchKnowledgeTool implements VapiTool {
 
   private readonly logger = new Logger(VapiSearchKnowledgeTool.name);
 
-  constructor(
-    @Inject(forwardRef(() => KnowledgeService))
-    private readonly knowledgeService: KnowledgeService,
-  ) {}
+  constructor(private readonly knowledgeService: KnowledgeService) {}
 
   async execute(
     args: { query: string; topK?: number },
