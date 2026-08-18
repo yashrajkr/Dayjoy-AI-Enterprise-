@@ -1666,6 +1666,7 @@ model SupportTicket {
   customerId   String?   @map("customer_id")
   assignedTo   User?     @relation(fields: [assignedToId], references: [id])
   assignedToId String?   @map("assigned_to")
+  ticketNumber String    @unique @map("ticket_number")
   subject      String
   description  String    @db.Text
   priority     String    @default("medium") // low, medium, high, urgent

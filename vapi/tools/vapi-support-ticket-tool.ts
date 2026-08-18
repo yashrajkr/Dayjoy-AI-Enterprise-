@@ -104,11 +104,13 @@ export class VapiSupportTicketTool implements VapiTool {
         `create_support_ticket(subject="${subject}", priority=${args?.priority ?? 'medium'}, tenant=${context.tenantId})`,
       );
 
+      const ticketNumber = `T${Date.now().toString(36).toUpperCase()}`;
       const ticket = await this.prisma.supportTicket.create({
         data: {
           tenantId: context.tenantId,
           customerId: context.customerId ?? null,
           assignedToId: null,
+          ticketNumber,
           subject,
           description,
           priority: args?.priority ?? 'medium',
@@ -155,7 +157,6 @@ export class VapiSupportTicketTool implements VapiTool {
 
       this.logger.log(`Support ticket created: ${ticket.id}`);
 
-      const ticketNumber = ticket.id.slice(0, 8).toUpperCase();
       return {
         success: true,
         data: {
