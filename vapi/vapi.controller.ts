@@ -273,8 +273,8 @@ export class VapiController {
         tenantId: user.tenantId,
         callId: call.id,
         phoneNumber: dto.phoneNumber,
-        status: 'active',
-        direction: 'outbound',
+        status: 'IN_PROGRESS',
+        direction: 'OUTBOUND',
         assistantId: dto.assistantId,
         customerId: dto.customerId ?? null,
         userId: user.userId,
@@ -379,7 +379,7 @@ export class VapiController {
       throw new NotFoundException(`Call ${id} not found`);
     }
 
-    if (session.status === 'ended') {
+    if (session.status === 'ENDED') {
       return { success: true, message: 'Call already ended' };
     }
 
@@ -397,7 +397,7 @@ export class VapiController {
     await this.prisma.voiceSession.update({
       where: { id },
       data: {
-        status: 'ended',
+        status: 'ENDED',
         endedAt: new Date(),
       },
     });
@@ -450,7 +450,7 @@ export class VapiController {
     return this.prisma.voiceSession.findMany({
       where: {
         tenantId: user.tenantId,
-        status: 'active',
+        status: 'IN_PROGRESS',
       },
       include: {
         customer: true,

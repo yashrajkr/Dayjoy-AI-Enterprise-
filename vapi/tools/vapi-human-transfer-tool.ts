@@ -146,7 +146,10 @@ export class VapiHumanTransferTool implements VapiTool {
           voiceSession = await this.prisma.voiceSession.update({
             where: { callId: context.callId },
             data: {
-              status: 'transferring',
+              // No dedicated "transferring" status in the VoiceCallStatus
+              // enum — the call is still IN_PROGRESS until Vapi's
+              // end-of-call-report marks it ENDED. Record the transfer
+              // intent in metadata instead of the status column.
               metadata: {
                 transferDepartment: department,
                 transferReason: reason,

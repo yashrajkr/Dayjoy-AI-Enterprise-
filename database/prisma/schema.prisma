@@ -921,16 +921,16 @@ model VoiceSession {
   // Vapi's call id. Mapped to the `vapi_call_id` column; kept as `callId` in
   // the Prisma field name since that's what the webhook handlers / REST
   // controller already reference.
-  callId          String?       @unique @map("vapi_call_id")
-  direction       String
+  callId          String?             @unique @map("vapi_call_id")
+  direction       VoiceCallDirection
   // `phoneNumber` maps to `from_number` (the caller's number for the
   // primary inbound-call flow). `toNumber` exposes the DB's `to_number`
   // column separately for callers that need both sides of the call.
-  phoneNumber     String?       @map("from_number")
-  toNumber        String?       @map("to_number")
-  assistantId     String?       @map("assistant_id_vapi")
-  status          String        @default("INITIATED")
-  outcome         String?
+  phoneNumber     String?             @map("from_number")
+  toNumber        String?             @map("to_number")
+  assistantId     String?             @map("assistant_id_vapi")
+  status          VoiceCallStatus     @default(INITIATED)
+  outcome         VoiceCallOutcome?
   intentDetected  String?       @map("intent_detected")
   startedAt       DateTime      @default(now()) @map("started_at")
   answeredAt      DateTime?     @map("answered_at")
