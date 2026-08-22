@@ -28,6 +28,27 @@ const DEFAULT_CHUNK_SIZE = 1000;
 const DEFAULT_CHUNK_OVERLAP = 200;
 const DEFAULT_QUERY_TOP_K = 5;
 const DEFAULT_CHAT_MODEL = 'gpt-4o';
+/**
+ * Minimum top-citation cosine-similarity score (`1 - cosine_distance`,
+ * from {@link vectorSearch}) required to treat retrieval as a genuine
+ * match rather than noise. Calibrated empirically against the live
+ * production `rag_chunks` corpus (864 real Dayjoy chunks, Gemini
+ * `gemini-embedding-001` @ 1536 dims):
+ *   - Genuine Dayjoy queries ("price of Aloevera Gel", "distributor
+ *     BV/DP", "what is BV") scored 0.63–0.78 on their top citation.
+ *   - Off-topic queries ("capital of France", "joke about cats", "what
+ *     time is it in Tokyo") scored 0.43–0.45 — pgvector always returns
+ *     the closest-available chunks even when none are actually
+ *     relevant, so a low but non-zero score is expected noise, not a
+ *     match.
+ * 0.55 sits in the gap between both clusters with margin on each side.
+ * Only gates the *vector*-search path — the text-search fallback (used
+ * when no embeddings exist) assigns a fixed score of 1.0 since a
+ * substring match is inherently relevant, so it's unaffected.
+ */
+const RAG_RELEVANCE_THRESHOLD = 0.55;
+const RAG_NO_MATCH_ANSWER =
+  "I don't have information about that in the Dayjoy knowledge base.";
 /** Matches the model/dimensions the 882 canonical rag_chunks were embedded with. */
 const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001';
 const GEMINI_EMBEDDING_DIMENSIONS = 1536;
@@ -470,7 +491,23 @@ export class KnowledgeService {
       score: c.score ?? 1.0,
     }));
 
-    const answer = await this.synthesizeAnswer(dto.query, citations);
+    // Relevance gate: pgvector's `<=>` ORDER BY always returns the
+    // closest-available chunks, even when none are actually relevant to
+    // the query (e.g. an off-topic question still "matches" something at
+    // a low score). Below `RAG_RELEVANCE_THRESHOLD`, refuse rather than
+    // let `synthesizeAnswer` (or its degraded-mode top-citation passthrough)
+    // present a low-relevance chunk as a confident answer. Text-search
+    // fallback results carry a fixed score of 1.0 (see the map above) and
+    // therefore always clear the gate — a substring match is inherently
+    // relevant, so this only gates the vector-search path.
+    const topScore =
+      citations.length > 0 ? Math.max(...citations.map((c) => c.score)) : 0;
+    const isRelevant = topScore >= RAG_RELEVANCE_THRESHOLD;
+
+    const answer = isRelevant
+      ? await this.synthesizeAnswer(dto.query, citations)
+      : RAG_NO_MATCH_ANSWER;
+    const returnedCitations = isRelevant ? citations : [];
     const latencyMs = Date.now() - startedAt;
 
     const ragQuery = await this.prisma.ragQuery.create({
@@ -481,14 +518,14 @@ export class KnowledgeService {
         queryText: dto.query,
         responseText: answer,
         latencyMs,
-        confidence: citations.length > 0 ? Math.max(...citations.map((c) => c.score), 0) : 0,
-        retrievedChunkIds: citations.map((c) => c.chunkId),
+        confidence: topScore,
+        retrievedChunkIds: returnedCitations.map((c) => c.chunkId),
       },
     });
 
     return {
       answer,
-      citations,
+      citations: returnedCitations,
       latencyMs,
       queryId: ragQuery.id,
     };
