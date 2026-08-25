@@ -139,8 +139,8 @@ importers:
         specifier: ^0.185.1
         version: 0.185.1
       zod:
-        specifier: ^3.23.8
-        version: 3.25.76
+        specifier: ^4.4.3
+        version: 4.4.3
       zustand:
         specifier: ^5.0.0
         version: 5.0.14(@types/react@19.2.18)(react@19.2.8)(use-sync-external-store@1.6.0(react@19.2.8))
@@ -302,8 +302,8 @@ importers:
         specifier: ^2.5.2
         version: 2.6.1
       zod:
-        specifier: ^3.23.8
-        version: 3.25.76
+        specifier: ^4.4.3
+        version: 4.4.3
       zustand:
         specifier: ^5.0.0
         version: 5.0.14(@types/react@19.2.18)(react@19.2.8)(use-sync-external-store@1.6.0(react@19.2.8))
@@ -370,7 +370,7 @@ importers:
     dependencies:
       '@hookform/resolvers':
         specifier: ^5.7.1
-        version: 5.8.0(@standard-schema/spec@1.1.0)(ajv-formats@2.1.1(ajv@8.20.0))(ajv@8.20.0)(class-transformer@0.5.1)(class-validator@0.14.4)(effect@3.20.0)(react-hook-form@7.85.0(react@19.2.8))(valibot@1.4.2(typescript@5.9.3))(zod@3.25.76)
+        version: 5.8.0(@standard-schema/spec@1.1.0)(ajv-formats@2.1.1(ajv@8.20.0))(ajv@8.20.0)(class-transformer@0.5.1)(class-validator@0.14.4)(effect@3.20.0)(react-hook-form@7.85.0(react@19.2.8))(valibot@1.4.2(typescript@5.9.3))(zod@4.4.3)
       '@radix-ui/react-alert-dialog':
         specifier: ^1.1.1
         version: 1.1.23(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -471,8 +471,8 @@ importers:
         specifier: ^2.5.2
         version: 2.6.1
       zod:
-        specifier: ^3.23.8
-        version: 3.25.76
+        specifier: ^4.4.3
+        version: 4.4.3
       zustand:
         specifier: ^5.0.0
         version: 5.0.14(@types/react@19.2.18)(react@19.2.8)(use-sync-external-store@1.6.0(react@19.2.8))
@@ -640,8 +640,8 @@ importers:
         specifier: ^2.5.2
         version: 2.6.1
       zod:
-        specifier: ^3.23.8
-        version: 3.25.76
+        specifier: ^4.4.3
+        version: 4.4.3
       zustand:
         specifier: ^5.0.0
         version: 5.0.14(@types/react@19.2.18)(react@19.2.8)(use-sync-external-store@1.6.0(react@19.2.8))
@@ -856,7 +856,7 @@ importers:
         version: 6.10.1
       openai:
         specifier: ^4.67.0
-        version: 4.104.0(ws@8.21.3)(zod@3.25.76)
+        version: 4.104.0(ws@8.21.3)(zod@4.4.3)
       passport:
         specifier: ^0.7.0
         version: 0.7.0
@@ -885,8 +885,8 @@ importers:
         specifier: ^3.13.0
         version: 3.19.0
       zod:
-        specifier: ^3.23.8
-        version: 3.25.76
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@nestjs/cli':
         specifier: ^11.0.24
@@ -958,8 +958,8 @@ importers:
         specifier: ^16.4.0
         version: 16.6.1
       zod:
-        specifier: ^3.23.0
-        version: 3.25.76
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/database:
     dependencies:
@@ -8747,6 +8747,9 @@ packages:
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
+  zod@4.4.3:
+    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+
   zustand@5.0.14:
     resolution: {integrity: sha512-/8tAspM5LMPr28b3fwLYrtdj77ECpfZviaP75CMTnwO8ISyaE4GDIG/9rDDYq/cH9D2Xw2A2RXglLInmVBQB/g==}
     engines: {node: '>=12.20.0'}
@@ -9398,7 +9401,7 @@ snapshots:
     dependencies:
       react-hook-form: 7.85.0(react@19.2.8)
 
-  '@hookform/resolvers@5.8.0(@standard-schema/spec@1.1.0)(ajv-formats@2.1.1(ajv@8.20.0))(ajv@8.20.0)(class-transformer@0.5.1)(class-validator@0.14.4)(effect@3.20.0)(react-hook-form@7.85.0(react@19.2.8))(valibot@1.4.2(typescript@5.9.3))(zod@3.25.76)':
+  '@hookform/resolvers@5.8.0(@standard-schema/spec@1.1.0)(ajv-formats@2.1.1(ajv@8.20.0))(ajv@8.20.0)(class-transformer@0.5.1)(class-validator@0.14.4)(effect@3.20.0)(react-hook-form@7.85.0(react@19.2.8))(valibot@1.4.2(typescript@5.9.3))(zod@4.4.3)':
     dependencies:
       '@standard-schema/utils': 0.3.0
       react-hook-form: 7.85.0(react@19.2.8)
@@ -9410,7 +9413,7 @@ snapshots:
       class-validator: 0.14.4
       effect: 3.20.0
       valibot: 1.4.2(typescript@5.9.3)
-      zod: 3.25.76
+      zod: 4.4.3
 
   '@humanfs/core@0.19.2':
     dependencies:
@@ -13544,8 +13547,8 @@ snapshots:
       '@babel/parser': 7.29.8
       eslint: 10.8.1(jiti@2.7.0)
       hermes-parser: 0.25.1
-      zod: 3.25.76
-      zod-validation-error: 4.0.2(zod@3.25.76)
+      zod: 4.4.3
+      zod-validation-error: 4.0.2(zod@4.4.3)
     transitivePeerDependencies:
       - supports-color
 
@@ -13555,8 +13558,8 @@ snapshots:
       '@babel/parser': 7.29.8
       eslint: 9.39.5(jiti@2.7.0)
       hermes-parser: 0.25.1
-      zod: 3.25.76
-      zod-validation-error: 4.0.2(zod@3.25.76)
+      zod: 4.4.3
+      zod-validation-error: 4.0.2(zod@4.4.3)
     transitivePeerDependencies:
       - supports-color
 
@@ -15583,6 +15586,21 @@ snapshots:
     transitivePeerDependencies:
       - encoding
 
+  openai@4.104.0(ws@8.21.3)(zod@4.4.3):
+    dependencies:
+      '@types/node': 18.19.130
+      '@types/node-fetch': 2.6.13
+      abort-controller: 3.0.0
+      agentkeepalive: 4.6.0
+      form-data-encoder: 1.7.2
+      formdata-node: 4.4.1
+      node-fetch: 2.7.0
+    optionalDependencies:
+      ws: 8.21.3
+      zod: 4.4.3
+    transitivePeerDependencies:
+      - encoding
+
   option@0.2.4: {}
 
   optionator@0.9.4:
@@ -17542,11 +17560,14 @@ snapshots:
       grammex: 3.1.13
       graphmatch: 1.1.1
 
-  zod-validation-error@4.0.2(zod@3.25.76):
+  zod-validation-error@4.0.2(zod@4.4.3):
     dependencies:
-      zod: 3.25.76
+      zod: 4.4.3
 
-  zod@3.25.76: {}
+  zod@3.25.76:
+    optional: true
+
+  zod@4.4.3: {}
 
   zustand@5.0.14(@types/react@19.2.18)(react@19.2.8)(use-sync-external-store@1.6.0(react@19.2.8)):
     optionalDependencies:
