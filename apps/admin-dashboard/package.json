@@ -20,7 +20,7 @@
     "clean": "rm -rf .next out coverage node_modules"
   },
   "dependencies": {
-    "next": "^16.3.0",
+    "next": "^16.3.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "@tanstack/react-query": "^5.59.0",
